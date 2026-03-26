@@ -1,0 +1,7 @@
+.env
+*.exe
+uploads/*
+!uploads/.gitkeep
+!uploads/chat/
+uploads/chat/*
+!uploads/chat/.gitkeep
