@@ -1,14 +1,19 @@
 package controllers
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"noteletwebservice-development/models"
 	jwtSvc "noteletwebservice-development/services/jwt"
@@ -20,7 +25,10 @@ import (
 
 // SupabaseAuthController handles authentication via Supabase Google OAuth.
 type SupabaseAuthController struct {
-	DB *sql.DB
+	DB           *sql.DB
+	jwksCache    map[string]*ecdsa.PublicKey
+	jwksCachedAt time.Time
+	jwksMu       sync.RWMutex
 }
 
 // NewSupabaseAuthController creates a new SupabaseAuthController.
@@ -32,8 +40,78 @@ type supabaseLoginRequest struct {
 	AccessToken string `json:"access_token"`
 }
 
-// SupabaseLogin verifies a Supabase access_token (JWT) obtained after Google
-// sign-in on the frontend, then returns the app's own JWT access/refresh pair.
+// jwkKeySet เก็บโครงสร้าง JWKS response จาก Supabase
+type jwkKeySet struct {
+	Keys []struct {
+		Kty string `json:"kty"`
+		Kid string `json:"kid"`
+		Alg string `json:"alg"`
+		Crv string `json:"crv"`
+		X   string `json:"x"`
+		Y   string `json:"y"`
+	} `json:"keys"`
+}
+
+// getPublicKey ดึง EC public key จาก Supabase JWKS endpoint (cached 1 ชั่วโมง)
+func (sc *SupabaseAuthController) getPublicKey(kid string) (*ecdsa.PublicKey, error) {
+	// ตรวจ cache ก่อน
+	sc.jwksMu.RLock()
+	if sc.jwksCache != nil && time.Since(sc.jwksCachedAt) < time.Hour {
+		if key, ok := sc.jwksCache[kid]; ok {
+			sc.jwksMu.RUnlock()
+			return key, nil
+		}
+	}
+	sc.jwksMu.RUnlock()
+
+	// ดึง JWKS ใหม่จาก Supabase
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		return nil, fmt.Errorf("SUPABASE_URL not configured")
+	}
+	jwksURL := strings.TrimRight(supabaseURL, "/") + "/auth/v1/.well-known/jwks.json"
+
+	resp, err := http.Get(jwksURL) // #nosec G107 — URL constructed from trusted env var
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var keySet jwkKeySet
+	if err := json.NewDecoder(resp.Body).Decode(&keySet); err != nil {
+		return nil, fmt.Errorf("failed to parse JWKS: %v", err)
+	}
+
+	// แปลง JWK → *ecdsa.PublicKey แล้วเก็บ cache
+	sc.jwksMu.Lock()
+	sc.jwksCache = make(map[string]*ecdsa.PublicKey)
+	sc.jwksCachedAt = time.Now()
+	for _, k := range keySet.Keys {
+		if k.Kty != "EC" || k.Crv != "P-256" {
+			continue
+		}
+		xBytes, err1 := base64.RawURLEncoding.DecodeString(k.X)
+		yBytes, err2 := base64.RawURLEncoding.DecodeString(k.Y)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		sc.jwksCache[k.Kid] = &ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(xBytes),
+			Y:     new(big.Int).SetBytes(yBytes),
+		}
+	}
+	pubKey := sc.jwksCache[kid]
+	sc.jwksMu.Unlock()
+
+	if pubKey == nil {
+		return nil, fmt.Errorf("no matching key found for kid: %s", kid)
+	}
+	return pubKey, nil
+}
+
+// SupabaseLogin verifies a Supabase access_token (JWT signed with ES256) obtained
+// after Google sign-in on the frontend, then returns the app's own JWT pair.
 //
 // POST /api/auth/supabase
 // Body: { "access_token": "<supabase_access_token>" }
@@ -49,41 +127,33 @@ func (sc *SupabaseAuthController) SupabaseLogin(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Load Supabase JWT secret from environment variable
-	jwtSecret := os.Getenv("SUPABASE_JWT_SECRET")
-	if jwtSecret == "" {
-		respondWithError(w, http.StatusInternalServerError, "Supabase JWT secret not configured", "")
+	// Parse โดยยังไม่ verify เพื่อดึง kid จาก header
+	unverified, _, err := jwt.NewParser().ParseUnverified(req.AccessToken, jwt.MapClaims{})
+	if err != nil {
+		respondWithError(w, http.StatusUnauthorized, "Malformed token", "")
+		return
+	}
+	kid, _ := unverified.Header["kid"].(string)
+
+	// ดึง EC public key ที่ตรงกับ kid จาก Supabase JWKS
+	pubKey, err := sc.getPublicKey(kid)
+	if err != nil {
+		log.Printf("[supabase_auth] JWKS error: %v", err)
+		respondWithError(w, http.StatusUnauthorized, "Failed to fetch Supabase signing key", "")
 		return
 	}
 
-	// Supabase exposes the JWT secret as a plain string in Project Settings → API.
-	// Try verifying with the raw secret first, then fall back to base64-decoded form.
-	secretBytes := []byte(jwtSecret)
-	if decoded, err := base64.StdEncoding.DecodeString(jwtSecret); err == nil && len(decoded) > 0 {
-		// Only prefer decoded form if it looks like real key material (not a printable phrase)
-		secretBytes = decoded
-	}
-
-	// Parse and verify the Supabase JWT (signed with HS256)
+	// Verify token ด้วย ES256 public key
 	token, err := jwt.Parse(req.AccessToken, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+		if _, ok := t.Method.(*jwt.SigningMethodECDSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-		return secretBytes, nil
+		return pubKey, nil
 	})
 	if err != nil || !token.Valid {
-		// Try the raw (non-decoded) secret as a fallback
-		token, err = jwt.Parse(req.AccessToken, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
-			}
-			return []byte(jwtSecret), nil
-		})
-		if err != nil || !token.Valid {
-			log.Printf("[supabase_auth] JWT verification failed: %v", err)
-			respondWithError(w, http.StatusUnauthorized, "Invalid or expired Supabase token", "")
-			return
-		}
+		log.Printf("[supabase_auth] JWT verification failed: %v", err)
+		respondWithError(w, http.StatusUnauthorized, "Invalid or expired Supabase token", "")
+		return
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
@@ -92,7 +162,7 @@ func (sc *SupabaseAuthController) SupabaseLogin(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Extract email from top-level claim
+	// Extract email
 	email, _ := claims["email"].(string)
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
@@ -106,7 +176,7 @@ func (sc *SupabaseAuthController) SupabaseLogin(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Extract display name from user_metadata (populated by Supabase from Google)
+	// Extract display name จาก user_metadata ที่ Supabase ดึงมาจาก Google
 	fullName := ""
 	if meta, ok := claims["user_metadata"].(map[string]interface{}); ok {
 		fullName, _ = meta["full_name"].(string)
@@ -203,7 +273,6 @@ func (sc *SupabaseAuthController) createUserFromSupabase(email, fullName string)
 	}
 	defer tx.Rollback()
 
-	// Insert AppUser with NULL password hash (OAuth-only account)
 	var userId int
 	err = tx.QueryRow(`
 		INSERT INTO appuser (email, passwordhash, isactive, createdat)
@@ -214,7 +283,6 @@ func (sc *SupabaseAuthController) createUserFromSupabase(email, fullName string)
 		return models.AppUser{}, err
 	}
 
-	// Create Owner row
 	var nextOwnerNo int
 	tx.QueryRow(`SELECT COALESCE(MAX(ownerno), 0) + 1 FROM owner`).Scan(&nextOwnerNo)
 	_, err = tx.Exec(`
@@ -225,7 +293,6 @@ func (sc *SupabaseAuthController) createUserFromSupabase(email, fullName string)
 		return models.AppUser{}, err
 	}
 
-	// Create Renter row
 	var nextRenterNo int
 	tx.QueryRow(`SELECT COALESCE(MAX(renterno), 0) + 1 FROM renter`).Scan(&nextRenterNo)
 	_, err = tx.Exec(`
