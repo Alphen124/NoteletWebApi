@@ -280,26 +280,29 @@ func (sc *SupabaseAuthController) createUserFromSupabase(email, fullName string)
 		RETURNING userid
 	`, email).Scan(&userId)
 	if err != nil {
+		log.Printf("[supabase_auth] INSERT appuser failed: %v", err)
 		return models.AppUser{}, err
 	}
 
 	var nextOwnerNo int
 	tx.QueryRow(`SELECT COALESCE(MAX(ownerno), 0) + 1 FROM owner`).Scan(&nextOwnerNo)
 	_, err = tx.Exec(`
-		INSERT INTO owner (ownerno, name, fname, lname, tel, rating, userid)
-		VALUES ($1, $2, $3, $4, '', 0, $5)
+		INSERT INTO owner (ownerno, name, fname, lname, tel, userid)
+		VALUES ($1, $2, $3, $4, '', $5)
 	`, nextOwnerNo, fullName, fname, lname, userId)
 	if err != nil {
+		log.Printf("[supabase_auth] INSERT owner failed (nextOwnerNo=%d): %v", nextOwnerNo, err)
 		return models.AppUser{}, err
 	}
 
 	var nextRenterNo int
 	tx.QueryRow(`SELECT COALESCE(MAX(renterno), 0) + 1 FROM renter`).Scan(&nextRenterNo)
 	_, err = tx.Exec(`
-		INSERT INTO renter (renterno, name, fname, lname, tel, rating, userid)
-		VALUES ($1, $2, $3, $4, '', 0, $5)
+		INSERT INTO renter (renterno, name, fname, lname, tel, userid)
+		VALUES ($1, $2, $3, $4, '', $5)
 	`, nextRenterNo, fullName, fname, lname, userId)
 	if err != nil {
+		log.Printf("[supabase_auth] INSERT renter failed (nextRenterNo=%d): %v", nextRenterNo, err)
 		return models.AppUser{}, err
 	}
 
