@@ -434,6 +434,7 @@ func main() {
 	authController := controllers.NewAuthController(db)
 	oauthController := controllers.NewOAuthController(db)
 	firebaseController := controllers.NewFirebaseAuthController(db)
+	supabaseController := controllers.NewSupabaseAuthController(db)
 	deviceController := controllers.NewDeviceController(db)
 	uploadController := controllers.NewUploadController("./uploads")
 	reviewController := controllers.NewReviewController(db)
@@ -444,7 +445,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Setup API routes first
-	apiMux := routers.SetupRoutes(authController, oauthController, firebaseController, deviceController, uploadController, reviewController, rentalController, chatController)
+	apiMux := routers.SetupRoutes(authController, oauthController, firebaseController, supabaseController, deviceController, uploadController, reviewController, rentalController, chatController)
 
 	// Mount API routes
 	mux.Handle("/api/", apiMux)
