@@ -2,8 +2,10 @@ package controllers
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -54,16 +56,34 @@ func (sc *SupabaseAuthController) SupabaseLogin(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	// Supabase exposes the JWT secret as a plain string in Project Settings → API.
+	// Try verifying with the raw secret first, then fall back to base64-decoded form.
+	secretBytes := []byte(jwtSecret)
+	if decoded, err := base64.StdEncoding.DecodeString(jwtSecret); err == nil && len(decoded) > 0 {
+		// Only prefer decoded form if it looks like real key material (not a printable phrase)
+		secretBytes = decoded
+	}
+
 	// Parse and verify the Supabase JWT (signed with HS256)
 	token, err := jwt.Parse(req.AccessToken, func(t *jwt.Token) (interface{}, error) {
 		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 		}
-		return []byte(jwtSecret), nil
+		return secretBytes, nil
 	})
 	if err != nil || !token.Valid {
-		respondWithError(w, http.StatusUnauthorized, "Invalid or expired Supabase token", "")
-		return
+		// Try the raw (non-decoded) secret as a fallback
+		token, err = jwt.Parse(req.AccessToken, func(t *jwt.Token) (interface{}, error) {
+			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
+			}
+			return []byte(jwtSecret), nil
+		})
+		if err != nil || !token.Valid {
+			log.Printf("[supabase_auth] JWT verification failed: %v", err)
+			respondWithError(w, http.StatusUnauthorized, "Invalid or expired Supabase token", "")
+			return
+		}
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
