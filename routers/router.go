@@ -191,8 +191,9 @@ func SetupRoutes(authController *controllers.AuthController, oauthController *co
 	mux.Handle("/api/reviews/", middlewares.CORSMiddleware(middlewares.AuthMiddleware(reviewApiMux)))
 
 	// ─── User profile / rating routes (public GET) ───────────────────────────
-	// GET /api/users/{userId}/reviews → ดูรีวิวทั้งหมดของ user
-	// GET /api/users/{userId}/rating  → ดู avg rating ของ user
+	// GET /api/users/{userId}/reviews        → ดูรีวิวทั้งหมดของ user
+	// GET /api/users/{userId}/rating         → ดู avg rating ของ user
+	// GET /api/users/{userId}/renter-profile → โปรไฟล์ผู้เช่า + stats + reviews
 	mux.HandleFunc("/api/users/", func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path
 		if strings.HasSuffix(path, "/reviews") && r.Method == http.MethodGet {
@@ -201,6 +202,10 @@ func SetupRoutes(authController *controllers.AuthController, oauthController *co
 		}
 		if strings.HasSuffix(path, "/rating") && r.Method == http.MethodGet {
 			middlewares.CORSMiddleware(http.HandlerFunc(reviewController.GetUserRating)).ServeHTTP(w, r)
+			return
+		}
+		if strings.HasSuffix(path, "/renter-profile") && r.Method == http.MethodGet {
+			middlewares.CORSMiddleware(middlewares.AuthMiddleware(http.HandlerFunc(reviewController.GetRenterProfile))).ServeHTTP(w, r)
 			return
 		}
 		http.Error(w, "Not found", http.StatusNotFound)

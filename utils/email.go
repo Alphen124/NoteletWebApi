@@ -8,7 +8,7 @@ func IsKMITLEmail(email string) bool {
 	return strings.HasSuffix(email, "@kmitl.ac.th")
 }
 
-// ValidateEmail ตรวจสอบรูปแบบอีเมล (เบื้องต้น)
+// ValidateEmail ตรวจสอบรูปแบบอีเมล (เบื้องต้น) (ไม่ได้ใช้ในตอนนี้ แต่เก็บไว้เผื่ออนาคต)
 func ValidateEmail(email string) bool {
 	email = strings.TrimSpace(email)
 	return strings.Contains(email, "@") && len(email) > 3

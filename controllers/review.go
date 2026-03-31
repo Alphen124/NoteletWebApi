@@ -609,3 +609,133 @@ func (rc *ReviewController) ReplyToReview(w http.ResponseWriter, r *http.Request
 
 	respondWithSuccess(w, http.StatusOK, "Reply saved successfully", nil)
 }
+
+// GetRenterProfile handles GET /api/users/{userId}/renter-profile
+// ดึงข้อมูลโปรไฟล์ผู้เช่า พร้อม stats และรีวิวที่ได้รับในฐานะผู้เช่า (public)
+func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
+		return
+	}
+
+	// Extract userId from /api/users/{userId}/renter-profile
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/users/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		respondWithError(w, http.StatusBadRequest, "User ID is required", "")
+		return
+	}
+	userID, err := strconv.Atoi(pathParts[0])
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid user ID", err.Error())
+		return
+	}
+
+	// ── 1. ดึงข้อมูลผู้ใช้จาก AppUser + Renter ──
+	var email string
+	var fname, lname, tel sql.NullString
+	err = rc.DB.QueryRow(`
+		SELECT au.Email,
+		       COALESCE(rt.FName, ''),
+		       COALESCE(rt.LName, ''),
+		       COALESCE(rt.Tel, '')
+		FROM AppUser au
+		LEFT JOIN Renter rt ON rt.UserId = au.UserId
+		WHERE au.UserId = $1
+	`, userID).Scan(&email, &fname, &lname, &tel)
+	if err == sql.ErrNoRows {
+		respondWithError(w, http.StatusNotFound, "User not found", "")
+		return
+	}
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Database error", err.Error())
+		return
+	}
+
+	// ── 2. Stats: totalCompletedRentals ──
+	var totalCompleted int
+	rc.DB.QueryRow(`
+		SELECT COUNT(*) FROM RentalRequest
+		WHERE RenterUserId = $1 AND Status = 'Rental Completed'
+	`, userID).Scan(&totalCompleted)
+
+	// ── 3. Stats: averageRating + reviewCount (owner reviewed renter) ──
+	var avgRating sql.NullFloat64
+	var reviewCount int
+	rc.DB.QueryRow(`
+		SELECT ROUND(AVG(Rating)::NUMERIC, 2), COUNT(*)
+		FROM UserReview
+		WHERE RevieweeUserId = $1 AND ReviewerRole = 'owner'
+	`, userID).Scan(&avgRating, &reviewCount)
+
+	avgRatingVal := 0.0
+	if avgRating.Valid {
+		avgRatingVal = avgRating.Float64
+	}
+
+	// ── 4. Reviews list ──
+	rows, err := rc.DB.Query(`
+		SELECT
+			ur.ReviewNo,
+			ur.Rating,
+			COALESCE(ur.Description, '')                               AS ReviewText,
+			COALESCE(d.DeviceName, '')                                 AS DeviceName,
+			COALESCE(
+				NULLIF(TRIM(COALESCE(ow.FName,'') || ' ' || COALESCE(ow.LName,'')), ''),
+				au_r.Email,
+				''
+			)                                                          AS ReviewerName,
+			ur.CreatedAt
+		FROM UserReview ur
+		LEFT JOIN RentalRequest rr ON rr.RequestNo = ur.RequestNo
+		LEFT JOIN Device d         ON d.DeviceNo = rr.DeviceNo
+		LEFT JOIN AppUser au_r     ON au_r.UserId = ur.ReviewerUserId
+		LEFT JOIN Owner ow         ON ow.UserId = ur.ReviewerUserId
+		WHERE ur.RevieweeUserId = $1
+		  AND ur.ReviewerRole = 'owner'
+		ORDER BY ur.CreatedAt DESC
+	`, userID)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to fetch reviews", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type ReviewItem struct {
+		ReviewID     int       `json:"reviewId"`
+		Rating       int       `json:"rating"`
+		ReviewText   string    `json:"reviewText"`
+		DeviceName   string    `json:"deviceName"`
+		ReviewerName string    `json:"reviewerName"`
+		CreatedAt    time.Time `json:"createdAt"`
+	}
+
+	var reviews []ReviewItem
+	for rows.Next() {
+		var item ReviewItem
+		if err := rows.Scan(
+			&item.ReviewID, &item.Rating, &item.ReviewText,
+			&item.DeviceName, &item.ReviewerName, &item.CreatedAt,
+		); err != nil {
+			fmt.Printf("Error scanning renter profile review row: %v\n", err)
+			continue
+		}
+		reviews = append(reviews, item)
+	}
+	if reviews == nil {
+		reviews = []ReviewItem{}
+	}
+
+	respondWithSuccess(w, http.StatusOK, "Renter profile retrieved successfully", map[string]interface{}{
+		"userId": userID,
+		"fname":  fname.String,
+		"lname":  lname.String,
+		"email":  email,
+		"tel":    tel.String,
+		"stats": map[string]interface{}{
+			"totalCompletedRentals": totalCompleted,
+			"averageRating":         avgRatingVal,
+			"reviewCount":           reviewCount,
+		},
+		"reviews": reviews,
+	})
+}
