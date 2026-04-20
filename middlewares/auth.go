@@ -18,9 +18,11 @@ const UserContextKey ContextKey = "user"
 
 // UserContext โครงสร้างสำหรับเก็บข้อมูล user ใน context
 type UserContext struct {
-	UserId  int
-	Email   string
-	IsAdmin bool
+	UserId             int
+	Email              string
+	IsAdmin            bool
+	IsAuthorizedLender bool
+	IsCentralStaff     bool
 }
 
 // AuthMiddleware middleware สำหรับตรวจสอบ JWT token
@@ -51,11 +53,12 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		// เก็บข้อมูล user ลง context
 		userCtx := UserContext{
-			UserId:  claims.UserId,
-			Email:   claims.Email,
-			IsAdmin: claims.IsAdmin,
+			UserId:             claims.UserId,
+			Email:              claims.Email,
+			IsAdmin:            claims.IsAdmin,
+			IsAuthorizedLender: claims.IsAuthorizedLender,
+			IsCentralStaff:     claims.IsCentralStaff,
 		}
-
 		ctx := context.WithValue(r.Context(), UserContextKey, userCtx)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

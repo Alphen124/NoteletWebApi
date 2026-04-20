@@ -8,12 +8,13 @@ import (
 // AppUser โครงสร้างสำหรับ AppUser table
 // ไม่ต้องมี Role เพราะ user ทุกคนเป็นทั้ง owner และ renter
 type AppUser struct {
-	UserId       int       `json:"user_id"`
-	Email        string    `json:"email"`
-	PasswordHash string    `json:"-"` // ไม่ส่งใน JSON response
-	IsActive     bool      `json:"is_active"`
-	IsAdmin      bool      `json:"is_admin"`
-	CreatedAt    time.Time `json:"created_at"`
+	UserId         int       `json:"user_id"`
+	Email          string    `json:"email"`
+	PasswordHash   string    `json:"-"` // ไม่ส่งใน JSON response
+	IsActive       bool      `json:"is_active"`
+	IsAdmin        bool      `json:"is_admin"`
+	IsCentralStaff bool      `json:"is_central_staff"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 // Owner โครงสร้างสำหรับ Owner table

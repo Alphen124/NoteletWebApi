@@ -35,18 +35,22 @@ func refreshTokenSecret() []byte {
 
 // Claims โครงสร้างสำหรับ JWT claims
 type Claims struct {
-	UserId  int    `json:"user_id"`
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"is_admin"`
+	UserId             int    `json:"user_id"`
+	Email              string `json:"email"`
+	IsAdmin            bool   `json:"is_admin"`
+	IsAuthorizedLender bool   `json:"is_authorized_lender"`
+	IsCentralStaff     bool   `json:"is_central_staff"`
 	jwt.RegisteredClaims
 }
 
 // GenerateAccessToken สร้าง access token
-func GenerateAccessToken(userId int, email string, isAdmin bool) (string, error) {
+func GenerateAccessToken(userId int, email string, isAdmin bool, isAuthorizedLender bool, isCentralStaff bool) (string, error) {
 	claims := Claims{
-		UserId:  userId,
-		Email:   email,
-		IsAdmin: isAdmin,
+		UserId:             userId,
+		Email:              email,
+		IsAdmin:            isAdmin,
+		IsAuthorizedLender: isAuthorizedLender,
+		IsCentralStaff:     isCentralStaff,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(AccessTokenExpiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -59,11 +63,13 @@ func GenerateAccessToken(userId int, email string, isAdmin bool) (string, error)
 }
 
 // GenerateRefreshToken สร้าง refresh token
-func GenerateRefreshToken(userId int, email string, isAdmin bool) (string, error) {
+func GenerateRefreshToken(userId int, email string, isAdmin bool, isAuthorizedLender bool, isCentralStaff bool) (string, error) {
 	claims := Claims{
-		UserId:  userId,
-		Email:   email,
-		IsAdmin: isAdmin,
+		UserId:             userId,
+		Email:              email,
+		IsAdmin:            isAdmin,
+		IsAuthorizedLender: isAuthorizedLender,
+		IsCentralStaff:     isCentralStaff,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(RefreshTokenExpiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -109,13 +115,13 @@ func validateToken(tokenString string, secret []byte) (*Claims, error) {
 }
 
 // GenerateTokenPair สร้าง access token และ refresh token พร้อมกัน
-func GenerateTokenPair(userId int, email string, isAdmin bool) (accessToken, refreshToken string, err error) {
-	accessToken, err = GenerateAccessToken(userId, email, isAdmin)
+func GenerateTokenPair(userId int, email string, isAdmin bool, isAuthorizedLender bool, isCentralStaff bool) (accessToken, refreshToken string, err error) {
+	accessToken, err = GenerateAccessToken(userId, email, isAdmin, isAuthorizedLender, isCentralStaff)
 	if err != nil {
 		return "", "", err
 	}
 
-	refreshToken, err = GenerateRefreshToken(userId, email, isAdmin)
+	refreshToken, err = GenerateRefreshToken(userId, email, isAdmin, isAuthorizedLender, isCentralStaff)
 	if err != nil {
 		return "", "", err
 	}

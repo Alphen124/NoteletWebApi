@@ -15,6 +15,10 @@ type Device struct {
 	Status       string    `json:"status"`
 	Condition    string    `json:"condition,omitempty"`
 	ImageUrl     string    `json:"imageUrl,omitempty"`
+	CPU          *string   `json:"cpu,omitempty"`
+	RAM          *string   `json:"ram,omitempty"`
+	Storage      *string   `json:"storage,omitempty"`
+	GPU          *string   `json:"gpu,omitempty"`
 	CreatedAt    time.Time `json:"createdAt"`
 }
 

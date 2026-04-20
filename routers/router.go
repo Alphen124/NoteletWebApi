@@ -126,6 +126,7 @@ func SetupRoutes(authController *controllers.AuthController, oauthController *co
 	rentalMux := http.NewServeMux()
 	rentalMux.HandleFunc("/api/rental-requests", rentalController.CreateRentalRequest)
 	rentalMux.HandleFunc("/api/rental-requests/incoming", rentalController.GetIncomingRequests)
+	rentalMux.HandleFunc("/api/rental-requests/staff-incoming", rentalController.GetStaffIncomingRequests)
 	rentalMux.HandleFunc("/api/rental-requests/outgoing", rentalController.GetOutgoingRequests)
 	rentalMux.HandleFunc("/api/chat/confirm-rental", rentalController.ConfirmRentalFromChat)
 	rentalMux.HandleFunc("/api/rental-requests/", func(w http.ResponseWriter, r *http.Request) {

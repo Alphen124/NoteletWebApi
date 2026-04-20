@@ -383,6 +383,26 @@ func main() {
 		fmt.Println("✓ Admin schema columns ready (is_admin, is_admin_device)")
 	}
 
+	// Migration 010: Authorized lender column
+	lenderSchemaMigrationSQL := `
+		ALTER TABLE appuser ADD COLUMN IF NOT EXISTS is_authorized_lender BOOLEAN NOT NULL DEFAULT FALSE;
+	`
+	if _, err := db.Exec(lenderSchemaMigrationSQL); err != nil {
+		fmt.Printf("Warning: authorized_lender migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ Authorized lender column ready (is_authorized_lender)")
+	}
+
+	// Migration 011: Central staff column
+	centralStaffMigrationSQL := `
+		ALTER TABLE appuser ADD COLUMN IF NOT EXISTS is_central_staff BOOLEAN NOT NULL DEFAULT FALSE;
+	`
+	if _, err := db.Exec(centralStaffMigrationSQL); err != nil {
+		fmt.Printf("Warning: central_staff migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ Central staff column ready (is_central_staff)")
+	}
+
 	// ============================================================
 	// Admin accounts seed (สร้าง 3 บัญชี admin ถ้ายังไม่มี)
 	// ============================================================
@@ -430,6 +450,54 @@ func main() {
 			fmt.Printf("✓ Admin account seeded: %s\n", acc.email)
 		}
 	}
+
+	// ============================================================
+	// Authorized Lender accounts seed (สร้างบัญชีที่มีสิทธิ์เพิ่มอุปกรณ์ยืม)
+	// ============================================================
+	lenderAccounts := []struct{ email, fname, lname string }{
+		{"test675@kmitl.ac.th", "CS", "Department"},
+	}
+	lenderPassword := "test1234"
+	hashedLenderPw, _ := utils.HashPassword(lenderPassword)
+	for _, acc := range lenderAccounts {
+		var existsId int
+		db.QueryRow(`SELECT userid FROM appuser WHERE email = $1`, acc.email).Scan(&existsId)
+		if existsId != 0 {
+			// มีอยู่แล้ว — ให้ is_authorized_lender = true
+			db.Exec(`UPDATE appuser SET is_authorized_lender = true WHERE email = $1`, acc.email)
+			fmt.Printf("✓ Authorized lender already exists, updated: %s\n", acc.email)
+			continue
+		}
+		tx, err := db.Begin()
+		if err != nil {
+			fmt.Printf("Warning: seed lender tx begin: %v\n", err)
+			continue
+		}
+		var userId int
+		err = tx.QueryRow(`
+			INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_authorized_lender, createdat)
+			VALUES ($1, $2, true, false, true, NOW()) RETURNING userid
+		`, acc.email, hashedLenderPw).Scan(&userId)
+		if err != nil {
+			tx.Rollback()
+			fmt.Printf("Warning: seed lender insert appuser (%s): %v\n", acc.email, err)
+			continue
+		}
+		var ownerNo int
+		tx.QueryRow(`SELECT COALESCE(MAX(ownerno),0)+1 FROM owner`).Scan(&ownerNo)
+		tx.Exec(`INSERT INTO owner (ownerno,name,fname,lname,tel,userid) VALUES ($1,$2,$3,$4,$5,$6)`,
+			ownerNo, acc.fname+" "+acc.lname, acc.fname, acc.lname, "", userId)
+		var renterNo int
+		tx.QueryRow(`SELECT COALESCE(MAX(renterno),0)+1 FROM renter`).Scan(&renterNo)
+		tx.Exec(`INSERT INTO renter (renterno,name,fname,lname,tel,userid) VALUES ($1,$2,$3,$4,$5,$6)`,
+			renterNo, acc.fname+" "+acc.lname, acc.fname, acc.lname, "", userId)
+		if err := tx.Commit(); err != nil {
+			fmt.Printf("Warning: seed lender commit (%s): %v\n", acc.email, err)
+		} else {
+			fmt.Printf("✓ Authorized lender account seeded: %s (password: %s)\n", acc.email, lenderPassword)
+		}
+	}
+
 	// สร้าง controllers
 	authController := controllers.NewAuthController(db)
 	oauthController := controllers.NewOAuthController(db)

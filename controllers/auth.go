@@ -21,12 +21,28 @@ var adminEmailWhitelist = []string{
 	"admin@notelet.com",
 	"supervisor@notelet.com",
 	"manager@notelet.com",
+	"staff@notelet.com",
+}
+
+// centralStaffEmails อีเมลที่ได้สิทธิ์เจ้าหน้าที่ส่วนกลาง
+var centralStaffEmails = []string{
+	"staff@notelet.com",
 }
 
 func isAdminEmail(email string) bool {
 	e := strings.ToLower(strings.TrimSpace(email))
 	for _, a := range adminEmailWhitelist {
 		if a == e {
+			return true
+		}
+	}
+	return false
+}
+
+func isCentralStaffEmail(email string) bool {
+	e := strings.ToLower(strings.TrimSpace(email))
+	for _, s := range centralStaffEmails {
+		if s == e {
 			return true
 		}
 	}
@@ -152,7 +168,7 @@ func (ac *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// สร้าง JWT tokens (is_admin=false สำหรับผู้ใช้ทั่วไป)
-	accessToken, refreshToken, err := jwt.GenerateTokenPair(userId, req.Email, false)
+	accessToken, refreshToken, err := jwt.GenerateTokenPair(userId, req.Email, isAdminEmail(req.Email), false, isCentralStaffEmail(req.Email))
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate tokens", err.Error())
 		return
@@ -183,15 +199,16 @@ func (ac *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ดึงข้อมูลผู้ใช้จากฐานข้อมูล (รวม is_admin)
+	// ดึงข้อมูลผู้ใช้จากฐานข้อมูล (รวม is_admin และ is_authorized_lender)
 	var user models.AppUser
+	var isAuthorizedLender, isCentralStaff bool
 	err := ac.DB.QueryRow(`
-		SELECT userid, email, passwordhash, isactive, COALESCE(is_admin, false), createdat
+		SELECT userid, email, passwordhash, isactive, COALESCE(is_admin, false), COALESCE(is_authorized_lender, false), COALESCE(is_central_staff, false), createdat
 		FROM appuser
 		WHERE email = $1
 	`, strings.ToLower(req.Email)).Scan(
 		&user.UserId, &user.Email, &user.PasswordHash,
-		&user.IsActive, &user.IsAdmin, &user.CreatedAt,
+		&user.IsActive, &user.IsAdmin, &isAuthorizedLender, &isCentralStaff, &user.CreatedAt,
 	)
 
 	// อีเมลใน whitelist ได้สิทธิ์ admin อัตโนมัติ
@@ -199,6 +216,11 @@ func (ac *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		user.IsAdmin = true
 		// อัปเดต DB ให้ตรงกัน (idempotent)
 		ac.DB.Exec(`UPDATE appuser SET is_admin = true WHERE email = $1`, strings.ToLower(req.Email))
+	}
+	// อีเมลเจ้าหน้าที่ส่วนกลาง
+	if isCentralStaffEmail(req.Email) {
+		isCentralStaff = true
+		ac.DB.Exec(`UPDATE appuser SET is_central_staff = true WHERE email = $1`, strings.ToLower(req.Email))
 	}
 
 	if err == sql.ErrNoRows {
@@ -244,8 +266,8 @@ func (ac *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		SELECT renterno, avgrating FROM renter WHERE userid = $1
 	`, user.UserId).Scan(&renterNo, &renterRating)
 
-	// สร้าง JWT tokens (รวม is_admin)
-	accessToken, refreshToken, err := jwt.GenerateTokenPair(user.UserId, user.Email, user.IsAdmin)
+	// สร้าง JWT tokens (รวม is_admin และ is_authorized_lender)
+	accessToken, refreshToken, err := jwt.GenerateTokenPair(user.UserId, user.Email, user.IsAdmin, isAuthorizedLender, isCentralStaff)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate tokens", err.Error())
 		return
@@ -319,10 +341,12 @@ func (ac *AuthController) RefreshToken(w http.ResponseWriter, r *http.Request) {
 
 	// ดึง is_admin ของผู้ใช้จาก DB
 	var isAdmin bool
+	var isCentralStaff bool
 	ac.DB.QueryRow(`SELECT COALESCE(is_admin, false) FROM appuser WHERE userid = $1`, claims.UserId).Scan(&isAdmin)
+	ac.DB.QueryRow(`SELECT COALESCE(is_central_staff, false) FROM appuser WHERE userid = $1`, claims.UserId).Scan(&isCentralStaff)
 
 	// สร้าง access token ใหม่ (รวม is_admin)
-	accessToken, err := jwt.GenerateAccessToken(claims.UserId, claims.Email, isAdmin)
+	accessToken, err := jwt.GenerateAccessToken(claims.UserId, claims.Email, isAdmin, false, isCentralStaff)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate access token", err.Error())
 		return
@@ -454,10 +478,10 @@ func (ac *AuthController) AdminRegister(w http.ResponseWriter, r *http.Request) 
 
 	var userId int
 	err = tx.QueryRow(`
-		INSERT INTO appuser (email, passwordhash, isactive, is_admin, createdat)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, createdat)
+		VALUES ($1, $2, $3, $4, $5, NOW())
 		RETURNING userid
-	`, strings.ToLower(req.Email), hashedPassword, true, true).Scan(&userId)
+	`, strings.ToLower(req.Email), hashedPassword, true, true, req.IsCentralStaff).Scan(&userId)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to create admin user", err.Error())
 		return
@@ -482,7 +506,7 @@ func (ac *AuthController) AdminRegister(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	accessToken, refreshToken, err := jwt.GenerateTokenPair(userId, req.Email, true)
+	accessToken, refreshToken, err := jwt.GenerateTokenPair(userId, req.Email, true, false, req.IsCentralStaff)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate tokens", err.Error())
 		return

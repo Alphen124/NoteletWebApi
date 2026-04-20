@@ -8,6 +8,10 @@ type CreateDeviceRequest struct {
 	Description string  `json:"description"`
 	Condition   string  `json:"condition" validate:"omitempty,oneof=new like-new good fair poor"`
 	ImageUrl    string  `json:"imageUrl"`
+	CPU         string  `json:"cpu"`
+	RAM         string  `json:"ram"`
+	Storage     string  `json:"storage"`
+	GPU         string  `json:"gpu"`
 }
 
 // UpdateDeviceRequest represents the request body for updating a device
@@ -19,6 +23,10 @@ type UpdateDeviceRequest struct {
 	Status      *string  `json:"status,omitempty" validate:"omitempty,oneof=available rented"`
 	Condition   *string  `json:"condition,omitempty" validate:"omitempty,oneof=new like-new good fair poor"`
 	ImageUrl    *string  `json:"imageUrl,omitempty"`
+	CPU         *string  `json:"cpu,omitempty"`
+	RAM         *string  `json:"ram,omitempty"`
+	Storage     *string  `json:"storage,omitempty"`
+	GPU         *string  `json:"gpu,omitempty"`
 }
 
 // UpdateDeviceStatusRequest represents the request body for updating device status

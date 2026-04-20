@@ -38,12 +38,6 @@ func (rc *RentalController) CreateRentalRequest(w http.ResponseWriter, r *http.R
 	}
 	renterUserID := userCtx.UserId
 
-	// Admin accounts cannot borrow/rent devices
-	if userCtx.IsAdmin {
-		respondWithError(w, http.StatusForbidden, "Admin accounts cannot rent or borrow devices", "")
-		return
-	}
-
 	var req struct {
 		DeviceNo   int     `json:"deviceNo"`
 		StartDate  string  `json:"startDate"`
@@ -502,13 +496,15 @@ func (rc *RentalController) ConfirmRequest(w http.ResponseWriter, r *http.Reques
 	// Fetch request + device owner + dates in one query.
 	var deviceNo, renterUserID, deviceOwnerID int
 	var reqStatus, startDate, endDate string
+	var totalPrice float64
 	err = rc.DB.QueryRow(`
 		SELECT rr.DeviceNo, rr.RenterUserId, d.UserId,
-		       rr.Status, rr.StartDate::TEXT, rr.EndDate::TEXT
+		       rr.Status, rr.StartDate::TEXT, rr.EndDate::TEXT,
+		       COALESCE(rr.TotalPrice, 0)
 		FROM  RentalRequest rr
 		JOIN  Device d ON d.DeviceNo = rr.DeviceNo
 		WHERE rr.RequestNo = $1
-	`, requestID).Scan(&deviceNo, &renterUserID, &deviceOwnerID, &reqStatus, &startDate, &endDate)
+	`, requestID).Scan(&deviceNo, &renterUserID, &deviceOwnerID, &reqStatus, &startDate, &endDate, &totalPrice)
 	if err == sql.ErrNoRows {
 		respondWithError(w, http.StatusNotFound, "Rental request not found", "")
 		return
@@ -516,9 +512,16 @@ func (rc *RentalController) ConfirmRequest(w http.ResponseWriter, r *http.Reques
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch request", err.Error())
 		return
 	}
-	if deviceOwnerID != ownerUserID {
-		respondWithError(w, http.StatusForbidden, "Not authorized to confirm this request", "")
-		return
+	if totalPrice == 0 {
+		if !userCtx.IsCentralStaff {
+			respondWithError(w, http.StatusForbidden, "Only central staff can confirm borrow requests", "")
+			return
+		}
+	} else {
+		if deviceOwnerID != ownerUserID {
+			respondWithError(w, http.StatusForbidden, "Not authorized to confirm this request", "")
+			return
+		}
 	}
 	if reqStatus != "Request Pending" {
 		respondWithError(w, http.StatusBadRequest, "Request is not in pending status", "")
@@ -658,12 +661,13 @@ func (rc *RentalController) RejectRequest(w http.ResponseWriter, r *http.Request
 
 	var deviceOwnerID int
 	var reqStatus string
+	var totalPrice float64
 	err = rc.DB.QueryRow(`
-		SELECT d.UserId, rr.Status
+		SELECT d.UserId, rr.Status, COALESCE(rr.TotalPrice, 0)
 		FROM  RentalRequest rr
 		JOIN  Device d ON d.DeviceNo = rr.DeviceNo
 		WHERE rr.RequestNo = $1
-	`, requestID).Scan(&deviceOwnerID, &reqStatus)
+	`, requestID).Scan(&deviceOwnerID, &reqStatus, &totalPrice)
 	if err == sql.ErrNoRows {
 		respondWithError(w, http.StatusNotFound, "Rental request not found", "")
 		return
@@ -671,9 +675,16 @@ func (rc *RentalController) RejectRequest(w http.ResponseWriter, r *http.Request
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch request", err.Error())
 		return
 	}
-	if deviceOwnerID != ownerUserID {
-		respondWithError(w, http.StatusForbidden, "Not authorized to reject this request", "")
-		return
+	if totalPrice == 0 {
+		if !userCtx.IsCentralStaff {
+			respondWithError(w, http.StatusForbidden, "Only central staff can reject borrow requests", "")
+			return
+		}
+	} else {
+		if deviceOwnerID != ownerUserID {
+			respondWithError(w, http.StatusForbidden, "Not authorized to reject this request", "")
+			return
+		}
 	}
 	if reqStatus != "Request Pending" {
 		respondWithError(w, http.StatusBadRequest, "Only pending requests can be rejected", "")
@@ -777,12 +788,13 @@ func (rc *RentalController) MarkActive(w http.ResponseWriter, r *http.Request) {
 
 	var deviceNo, deviceOwnerID int
 	var reqStatus string
+	var totalPrice float64
 	err = rc.DB.QueryRow(`
-		SELECT rr.DeviceNo, d.UserId, rr.Status
+		SELECT rr.DeviceNo, d.UserId, rr.Status, COALESCE(rr.TotalPrice, 0)
 		FROM  RentalRequest rr
 		JOIN  Device d ON d.DeviceNo = rr.DeviceNo
 		WHERE rr.RequestNo = $1
-	`, requestID).Scan(&deviceNo, &deviceOwnerID, &reqStatus)
+	`, requestID).Scan(&deviceNo, &deviceOwnerID, &reqStatus, &totalPrice)
 	if err == sql.ErrNoRows {
 		respondWithError(w, http.StatusNotFound, "Rental request not found", "")
 		return
@@ -790,9 +802,16 @@ func (rc *RentalController) MarkActive(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch request", err.Error())
 		return
 	}
-	if deviceOwnerID != ownerUserID {
-		respondWithError(w, http.StatusForbidden, "Not authorized", "")
-		return
+	if totalPrice == 0 {
+		if !userCtx.IsCentralStaff {
+			respondWithError(w, http.StatusForbidden, "Only central staff can manage borrow requests", "")
+			return
+		}
+	} else {
+		if deviceOwnerID != ownerUserID {
+			respondWithError(w, http.StatusForbidden, "Not authorized", "")
+			return
+		}
 	}
 	if reqStatus != "Booking Confirmed" {
 		respondWithError(w, http.StatusBadRequest, "Only Booking Confirmed requests can be marked as Rental Active", "")
@@ -874,12 +893,14 @@ func (rc *RentalController) MarkReturned(w http.ResponseWriter, r *http.Request)
 	var deviceNo, deviceOwnerID int
 	var reqStatus string
 	var rentListNo, rentListSeq sql.NullInt64
+	var totalPrice float64
 	err = rc.DB.QueryRow(`
-		SELECT rr.DeviceNo, d.UserId, rr.Status, rr.RentListNo, rr.RentListSeq
+		SELECT rr.DeviceNo, d.UserId, rr.Status, rr.RentListNo, rr.RentListSeq,
+		       COALESCE(rr.TotalPrice, 0)
 		FROM  RentalRequest rr
 		JOIN  Device d ON d.DeviceNo = rr.DeviceNo
 		WHERE rr.RequestNo = $1
-	`, requestID).Scan(&deviceNo, &deviceOwnerID, &reqStatus, &rentListNo, &rentListSeq)
+	`, requestID).Scan(&deviceNo, &deviceOwnerID, &reqStatus, &rentListNo, &rentListSeq, &totalPrice)
 	if err == sql.ErrNoRows {
 		respondWithError(w, http.StatusNotFound, "Rental request not found", "")
 		return
@@ -887,9 +908,16 @@ func (rc *RentalController) MarkReturned(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusInternalServerError, "Failed to fetch request", err.Error())
 		return
 	}
-	if deviceOwnerID != ownerUserID {
-		respondWithError(w, http.StatusForbidden, "Not authorized", "")
-		return
+	if totalPrice == 0 {
+		if !userCtx.IsCentralStaff {
+			respondWithError(w, http.StatusForbidden, "Only central staff can manage borrow requests", "")
+			return
+		}
+	} else {
+		if deviceOwnerID != ownerUserID {
+			respondWithError(w, http.StatusForbidden, "Not authorized", "")
+			return
+		}
 	}
 	if reqStatus != "Booking Confirmed" && reqStatus != "Rental Active" {
 		respondWithError(w, http.StatusBadRequest, "Only confirmed/active requests can be marked as returned", "")
@@ -1191,4 +1219,86 @@ func extractRentalRequestID(path string) (int, error) {
 		return 0, fmt.Errorf("missing request ID")
 	}
 	return strconv.Atoi(parts[0])
+}
+
+// �����������������������������������������������������������������������������
+// GetStaffIncomingRequests  GET /api/rental-requests/staff-incoming
+// Returns ALL borrow requests (TotalPrice=0). Requires is_central_staff.
+// �����������������������������������������������������������������������������
+
+func (rc *RentalController) GetStaffIncomingRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
+		return
+	}
+
+	userCtx, ok := r.Context().Value(middlewares.UserContextKey).(middlewares.UserContext)
+	if !ok {
+		respondWithError(w, http.StatusUnauthorized, "Unauthorized", "")
+		return
+	}
+	if !userCtx.IsCentralStaff {
+		respondWithError(w, http.StatusForbidden, "Only central staff can access this endpoint", "")
+		return
+	}
+
+	rows, err := rc.DB.Query(`
+		SELECT
+			rr.RequestNo,
+			rr.DeviceNo,
+			COALESCE(d.DeviceName, '') AS device_name,
+			rr.RenterUserId,
+			COALESCE(renter_o.FName || ' ' || renter_o.LName, '') AS renter_name,
+			rr.Status,
+			rr.StartDate::TEXT,
+			rr.EndDate::TEXT,
+			COALESCE(rr.TotalPrice, 0),
+			rr.CreatedAt
+		FROM RentalRequest rr
+		LEFT JOIN Device d ON d.DeviceNo = rr.DeviceNo
+		LEFT JOIN Owner renter_o ON renter_o.UserId = rr.RenterUserId
+		WHERE COALESCE(rr.TotalPrice, 0) = 0
+		ORDER BY
+			CASE rr.Status
+				WHEN 'Request Pending'   THEN 1
+				WHEN 'Booking Confirmed' THEN 2
+				WHEN 'Rental Active'     THEN 3
+				ELSE 4
+			END,
+			rr.CreatedAt DESC
+	`)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to fetch borrow requests", err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type BorrowItem struct {
+		RequestNo    int       `json:"requestNo"`
+		DeviceNo     int       `json:"deviceNo"`
+		DeviceName   string    `json:"deviceName"`
+		RenterUserId int       `json:"renterUserId"`
+		RenterName   string    `json:"renterName"`
+		Status       string    `json:"status"`
+		StartDate    string    `json:"startDate"`
+		EndDate      string    `json:"endDate"`
+		TotalPrice   float64   `json:"totalPrice"`
+		CreatedAt    time.Time `json:"createdAt"`
+	}
+
+	items := []BorrowItem{}
+	for rows.Next() {
+		var item BorrowItem
+		if err := rows.Scan(
+			&item.RequestNo, &item.DeviceNo, &item.DeviceName,
+			&item.RenterUserId, &item.RenterName,
+			&item.Status, &item.StartDate, &item.EndDate,
+			&item.TotalPrice, &item.CreatedAt,
+		); err != nil {
+			respondWithError(w, http.StatusInternalServerError, "Failed to scan row", err.Error())
+			return
+		}
+		items = append(items, item)
+	}
+	respondWithSuccess(w, http.StatusOK, "Borrow requests retrieved", items)
 }

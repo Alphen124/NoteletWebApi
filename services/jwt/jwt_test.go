@@ -15,7 +15,7 @@ func setup() {
 func TestGenerateAccessToken(t *testing.T) {
 	setup()
 
-	token, err := GenerateAccessToken(1, "test@kmitl.ac.th", false)
+	token, err := GenerateAccessToken(1, "test@kmitl.ac.th", false, false, false)
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
@@ -24,7 +24,7 @@ func TestGenerateAccessToken(t *testing.T) {
 func TestValidateAccessToken(t *testing.T) {
 	setup()
 
-	token, _ := GenerateAccessToken(1, "test@kmitl.ac.th", false)
+	token, _ := GenerateAccessToken(1, "test@kmitl.ac.th", false, false, false)
 	claims, err := ValidateAccessToken(token)
 
 	assert.NoError(t, err)

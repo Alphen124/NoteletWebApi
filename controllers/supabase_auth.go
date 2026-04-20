@@ -222,7 +222,7 @@ func (sc *SupabaseAuthController) SupabaseLogin(w http.ResponseWriter, r *http.R
 		user.UserId).Scan(&renterNo, &renterRating)
 
 	// Issue app JWT tokens
-	accessToken, refreshToken, err := jwtSvc.GenerateTokenPair(user.UserId, user.Email, false)
+	accessToken, refreshToken, err := jwtSvc.GenerateTokenPair(user.UserId, user.Email, false, false, false)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to generate tokens", err.Error())
 		return

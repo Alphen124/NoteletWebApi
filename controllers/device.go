@@ -93,16 +93,30 @@ func (dc *DeviceController) CreateDevice(w http.ResponseWriter, r *http.Request)
 	}
 	fmt.Printf("Found OwnerNo: %d for UserId: %d\n", ownerNo, userID)
 
-	// Insert device (set is_admin_device if user is admin)
+	// Insert device (set is_admin_device if user is admin or authorized lender)
 	var deviceNo int
-	isAdminDevice := userCtx.IsAdmin
+	isAdminDevice := userCtx.IsAdmin || userCtx.IsAuthorizedLender
 	query := `
-		INSERT INTO Device (DeviceName, Description, RentPrice, DeviceTypeNo, TypeNo, UserId, ImageUrl, is_admin_device)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO Device (DeviceName, Description, RentPrice, DeviceTypeNo, TypeNo, UserId, ImageUrl, is_admin_device, CPU, RAM, Storage, GPU, Status)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)
 		RETURNING DeviceNo
 	`
 	fmt.Printf("Executing query with params: Name=%s, Desc=%s, Price=%.2f, DeviceTypeNo=%d, TypeNo=%d, UserID=%d, ImageUrl=%s, IsAdminDevice=%v\n",
 		req.Name, req.Description, req.Price, deviceTypeNo, ownerNo, userID, req.ImageUrl, isAdminDevice)
+
+	var cpuVal, ramVal, storageVal, gpuVal interface{}
+	if req.CPU != "" {
+		cpuVal = req.CPU
+	}
+	if req.RAM != "" {
+		ramVal = req.RAM
+	}
+	if req.Storage != "" {
+		storageVal = req.Storage
+	}
+	if req.GPU != "" {
+		gpuVal = req.GPU
+	}
 
 	err = dc.DB.QueryRow(
 		query,
@@ -114,6 +128,10 @@ func (dc *DeviceController) CreateDevice(w http.ResponseWriter, r *http.Request)
 		userID,
 		req.ImageUrl,
 		isAdminDevice,
+		cpuVal,
+		ramVal,
+		storageVal,
+		gpuVal,
 	).Scan(&deviceNo)
 
 	if err != nil {
@@ -177,12 +195,13 @@ func (dc *DeviceController) GetMyDevices(w http.ResponseWriter, r *http.Request)
 
 	query := `
 		SELECT 
-			d.DeviceNo, d.DeviceName, d.Description, d.RentPrice,
+			d.DeviceNo, d.DeviceName, COALESCE(d.Description, '') as Description, d.RentPrice,
 			COALESCE(dt.DeviceTypeName, 'อื่นๆ') as DeviceTypeName,
-			d.Rating,
-			COALESCE(s.Name, d.Status::TEXT) as StatusName,
+			COALESCE(d.Rating, 0) as Rating,
+			COALESCE(s.Name, d.Status::TEXT, 'Request Pending') as StatusName,
 			COALESCE(d.ImageUrl, '') as ImageUrl,
-			d.CreatedAt
+			d.CreatedAt,
+			d.CPU, d.RAM, d.Storage, d.GPU
 		FROM Device d
 		LEFT JOIN DeviceType dt ON d.DeviceTypeNo = dt.DeviceTypeNo
 		LEFT JOIN Status s ON d.Status = s.StatusNo
@@ -204,10 +223,12 @@ func (dc *DeviceController) GetMyDevices(w http.ResponseWriter, r *http.Request)
 		var rentPrice, rating float64
 		var deviceTypeName string
 		var createdAt sql.NullTime
+		var cpu, ram, storage, gpu sql.NullString
 
 		err := rows.Scan(
 			&deviceNo, &deviceName, &description, &rentPrice,
 			&deviceTypeName, &rating, &statusName, &imageUrl, &createdAt,
+			&cpu, &ram, &storage, &gpu,
 		)
 		if err != nil {
 			continue
@@ -222,12 +243,14 @@ func (dc *DeviceController) GetMyDevices(w http.ResponseWriter, r *http.Request)
 			"rating":      rating,
 			"status":      statusName,
 			"imageUrl":    imageUrl,
+			"cpu":         cpu.String,
+			"ram":         ram.String,
+			"storage":     storage.String,
+			"gpu":         gpu.String,
 		}
-
 		if createdAt.Valid {
 			device["createdAt"] = createdAt.Time
 		}
-
 		devices = append(devices, device)
 	}
 
@@ -259,7 +282,8 @@ func (dc *DeviceController) GetAllDevices(w http.ResponseWriter, r *http.Request
 			COALESCE(d.ImageUrl, '') as ImageUrl,
 			d.CreatedAt,
 			COALESCE(au.Email, '') as OwnerEmail,
-			COALESCE(d.is_admin_device, false) as IsAdminDevice
+			COALESCE(d.is_admin_device, false) as IsAdminDevice,
+			d.CPU, d.RAM, d.Storage, d.GPU
 		FROM Device d
 		LEFT JOIN DeviceType dt ON d.DeviceTypeNo = dt.DeviceTypeNo
 		LEFT JOIN AppUser au ON d.UserId = au.UserId
@@ -292,11 +316,13 @@ func (dc *DeviceController) GetAllDevices(w http.ResponseWriter, r *http.Request
 		var rentPrice, rating float64
 		var createdAt sql.NullTime
 		var isAdminDevice bool
+		var cpu, ram, storage, gpu sql.NullString
 
 		err := rows.Scan(
 			&deviceNo, &deviceName, &description, &rentPrice,
 			&deviceTypeName, &rating, &statusName,
 			&imageUrl, &createdAt, &ownerEmail, &isAdminDevice,
+			&cpu, &ram, &storage, &gpu,
 		)
 		if err != nil {
 			fmt.Printf("Error scanning browse row: %v\n", err)
@@ -314,6 +340,10 @@ func (dc *DeviceController) GetAllDevices(w http.ResponseWriter, r *http.Request
 			"imageUrl":      imageUrl,
 			"ownerEmail":    ownerEmail,
 			"isAdminDevice": isAdminDevice,
+			"cpu":           cpu.String,
+			"ram":           ram.String,
+			"storage":       storage.String,
+			"gpu":           gpu.String,
 		}
 		if createdAt.Valid {
 			device["createdAt"] = createdAt.Time
@@ -363,7 +393,8 @@ func (dc *DeviceController) GetDevice(w http.ResponseWriter, r *http.Request) {
 			d.CreatedAt,
 			COALESCE(au.Email, '') as OwnerEmail,
 			d.UserId as OwnerUserId,
-			COALESCE(d.is_admin_device, false) as IsAdminDevice
+			COALESCE(d.is_admin_device, false) as IsAdminDevice,
+			d.CPU, d.RAM, d.Storage, d.GPU
 		FROM Device d
 		LEFT JOIN DeviceType dt ON d.DeviceTypeNo = dt.DeviceTypeNo
 		LEFT JOIN AppUser au ON d.UserId = au.UserId
@@ -376,10 +407,12 @@ func (dc *DeviceController) GetDevice(w http.ResponseWriter, r *http.Request) {
 	var rentPrice, rating float64
 	var createdAt sql.NullTime
 	var isAdminDevice bool
+	var cpu, ram, storage, gpu sql.NullString
 
 	err = dc.DB.QueryRow(query, deviceID).Scan(
 		&deviceNo, &deviceName, &description, &rentPrice,
 		&deviceTypeName, &rating, &statusName, &imageUrl, &createdAt, &ownerEmail, &ownerUserID, &isAdminDevice,
+		&cpu, &ram, &storage, &gpu,
 	)
 
 	if err == sql.ErrNoRows {
@@ -402,6 +435,10 @@ func (dc *DeviceController) GetDevice(w http.ResponseWriter, r *http.Request) {
 		"ownerEmail":    ownerEmail,
 		"ownerUserId":   ownerUserID,
 		"isAdminDevice": isAdminDevice,
+		"cpu":           cpu.String,
+		"ram":           ram.String,
+		"storage":       storage.String,
+		"gpu":           gpu.String,
 	}
 
 	if createdAt.Valid {
@@ -472,12 +509,12 @@ func (dc *DeviceController) UpdateDevice(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Validate required fields (admin อนุญาตให้ price=0 สำหรับอุปกรณ์ยืมจากคณะ)
+	// Validate required fields (admin/authorized lender อนุญาตให้ price=0 สำหรับอุปกรณ์ยืมจากคณะ)
 	if req.Name == "" || req.Type == "" {
 		respondWithError(w, http.StatusBadRequest, "Name and type are required", "")
 		return
 	}
-	if !userCtx.IsAdmin && req.Price <= 0 {
+	if !userCtx.IsAdmin && !userCtx.IsAuthorizedLender && req.Price <= 0 {
 		respondWithError(w, http.StatusBadRequest, "Price must be greater than 0", "")
 		return
 	}
@@ -498,17 +535,45 @@ func (dc *DeviceController) UpdateDevice(w http.ResponseWriter, r *http.Request)
 	if userCtx.IsAdmin {
 		updateQ := `
 			UPDATE Device 
-			SET DeviceName = $1, Description = $2, RentPrice = $3, DeviceTypeNo = $4, ImageUrl = $5, UpdatedAt = CURRENT_TIMESTAMP
-			WHERE DeviceNo = $6
+			SET DeviceName = $1, Description = $2, RentPrice = $3, DeviceTypeNo = $4, ImageUrl = $5,
+			    CPU = $6, RAM = $7, Storage = $8, GPU = $9, UpdatedAt = CURRENT_TIMESTAMP
+			WHERE DeviceNo = $10
 		`
-		result, err = dc.DB.Exec(updateQ, req.Name, req.Description, req.Price, deviceTypeNo, req.ImageUrl, deviceID)
+		var cpuVal, ramVal, storageVal, gpuVal interface{}
+		if req.CPU != "" {
+			cpuVal = req.CPU
+		}
+		if req.RAM != "" {
+			ramVal = req.RAM
+		}
+		if req.Storage != "" {
+			storageVal = req.Storage
+		}
+		if req.GPU != "" {
+			gpuVal = req.GPU
+		}
+		result, err = dc.DB.Exec(updateQ, req.Name, req.Description, req.Price, deviceTypeNo, req.ImageUrl, cpuVal, ramVal, storageVal, gpuVal, deviceID)
 	} else {
 		updateQ := `
 			UPDATE Device 
-			SET DeviceName = $1, Description = $2, RentPrice = $3, DeviceTypeNo = $4, ImageUrl = $5, UpdatedAt = CURRENT_TIMESTAMP
-			WHERE DeviceNo = $6 AND UserId = $7
+			SET DeviceName = $1, Description = $2, RentPrice = $3, DeviceTypeNo = $4, ImageUrl = $5,
+			    CPU = $6, RAM = $7, Storage = $8, GPU = $9, UpdatedAt = CURRENT_TIMESTAMP
+			WHERE DeviceNo = $10 AND UserId = $11
 		`
-		result, err = dc.DB.Exec(updateQ, req.Name, req.Description, req.Price, deviceTypeNo, req.ImageUrl, deviceID, userID)
+		var cpuVal, ramVal, storageVal, gpuVal interface{}
+		if req.CPU != "" {
+			cpuVal = req.CPU
+		}
+		if req.RAM != "" {
+			ramVal = req.RAM
+		}
+		if req.Storage != "" {
+			storageVal = req.Storage
+		}
+		if req.GPU != "" {
+			gpuVal = req.GPU
+		}
+		result, err = dc.DB.Exec(updateQ, req.Name, req.Description, req.Price, deviceTypeNo, req.ImageUrl, cpuVal, ramVal, storageVal, gpuVal, deviceID, userID)
 	}
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to update device", err.Error())
