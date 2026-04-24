@@ -50,6 +50,8 @@ func (rc *ReviewController) GetDeviceReviews(w http.ResponseWriter, r *http.Requ
 			COALESCE(au.Email, '') as ReviewerEmail,
 			rv.Rating,
 			COALESCE(rv.Description, '') as Description,
+			rv.RatingCondition,
+			rv.RatingValue,
 			rv.CreatedAt
 		FROM Review rv
 		LEFT JOIN AppUser au ON rv.ReviewerUserId = au.UserId
@@ -63,13 +65,19 @@ func (rc *ReviewController) GetDeviceReviews(w http.ResponseWriter, r *http.Requ
 	defer rows.Close()
 
 	type ReviewEntry struct {
-		ReviewNo       int       `json:"reviewNo"`
-		DeviceNo       int       `json:"deviceNo"`
-		ReviewerUserId int       `json:"reviewerUserId"`
-		ReviewerEmail  string    `json:"reviewerEmail"`
-		Rating         int       `json:"rating"`
-		Description    string    `json:"description"`
-		CreatedAt      time.Time `json:"createdAt"`
+		ReviewNo        int       `json:"reviewNo"`
+		DeviceNo        int       `json:"deviceNo"`
+		ReviewerUserId  int       `json:"reviewerUserId"`
+		ReviewerEmail   string    `json:"reviewerEmail"`
+		Rating          int       `json:"rating"`
+		Description     string    `json:"description"`
+		RatingCondition *int      `json:"ratingCondition"`
+		RatingValue     *int      `json:"ratingValue"`
+		CreatedAt       time.Time `json:"createdAt"`
+		RatingCommunication int `json:"ratingCommunication"`
+		RatingPunctuality   int `json:"ratingPunctuality"`
+		RatingAccuracy      int `json:"ratingAccuracy"`
+		RatingCare          int `json:"ratingCare"`
 	}
 
 	var reviews []ReviewEntry
@@ -82,6 +90,8 @@ func (rc *ReviewController) GetDeviceReviews(w http.ResponseWriter, r *http.Requ
 			&entry.ReviewerEmail,
 			&entry.Rating,
 			&entry.Description,
+			&entry.RatingCondition,
+			&entry.RatingValue,
 			&entry.CreatedAt,
 		)
 		if err != nil {
@@ -142,8 +152,10 @@ func (rc *ReviewController) CreateDeviceReview(w http.ResponseWriter, r *http.Re
 
 	// Parse request body
 	var req struct {
-		Rating      int    `json:"rating"`
-		Description string `json:"description"`
+		Rating          int    `json:"rating"`
+		Description     string `json:"description"`
+		RatingCondition *int   `json:"ratingCondition"`
+		RatingValue     *int   `json:"ratingValue"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid request body", err.Error())
@@ -167,12 +179,14 @@ func (rc *ReviewController) CreateDeviceReview(w http.ResponseWriter, r *http.Re
 	// Upsert review (update if already reviewed by this user for this device)
 	var reviewNo int
 	err = rc.DB.QueryRow(`
-		INSERT INTO Review (DeviceNo, ReviewerUserId, Rating, Description, CreatedAt)
-		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+		INSERT INTO Review (DeviceNo, ReviewerUserId, Rating, Description, RatingCondition, RatingValue, CreatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
 		ON CONFLICT (DeviceNo, ReviewerUserId)
-		DO UPDATE SET Rating = EXCLUDED.Rating, Description = EXCLUDED.Description, CreatedAt = CURRENT_TIMESTAMP
+		DO UPDATE SET Rating = EXCLUDED.Rating, Description = EXCLUDED.Description,
+		             RatingCondition = EXCLUDED.RatingCondition, RatingValue = EXCLUDED.RatingValue,
+		             CreatedAt = CURRENT_TIMESTAMP
 		RETURNING ReviewNo
-	`, deviceID, userID, req.Rating, req.Description).Scan(&reviewNo)
+	`, deviceID, userID, req.Rating, req.Description, req.RatingCondition, req.RatingValue).Scan(&reviewNo)
 
 	if err != nil {
 		fmt.Printf("Error creating review: %v\n", err)
@@ -185,9 +199,9 @@ func (rc *ReviewController) CreateDeviceReview(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+// เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌ
 // USER-TO-USER REVIEW SYSTEM
-// ─────────────────────────────────────────────────────────────────────────────
+// เนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌเนโ€โฌ
 
 // CreateUserReview handles POST /api/reviews
 // Renter can review Owner after status = "Rental Active" or "Rental Completed"
@@ -206,9 +220,13 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 	reviewerID := userCtx.UserId
 
 	var req struct {
-		RequestNo   int    `json:"requestNo"`
-		Rating      int    `json:"rating"`
-		Description string `json:"description"`
+		RequestNo           int    `json:"requestNo"`
+		Rating              int    `json:"rating"`
+		Description         string `json:"description"`
+		RatingCommunication *int   `json:"ratingCommunication"`
+		RatingPunctuality   *int   `json:"ratingPunctuality"`
+		RatingAccuracy      *int   `json:"ratingAccuracy"`
+		RatingCare          *int   `json:"ratingCare"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid request body", err.Error())
@@ -223,7 +241,7 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// ── ดึง RentalRequest + owner ──
+	// เนโ€โฌเนโ€โฌ เน€เธโ€เน€เธเธ–เน€เธย RentalRequest + owner เนโ€โฌเนโ€โฌ
 	var status string
 	var renterUserID, ownerUserID int
 	err := rc.DB.QueryRow(`
@@ -241,14 +259,14 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// ── ตรวจ role + เงื่อนไข ──
+	// เนโ€โฌเนโ€โฌ เน€เธโ€ขเน€เธเธเน€เธเธเน€เธย role + เน€เธโฌเน€เธยเน€เธเธ—เน€เธยเน€เธเธเน€เธยเน€เธยเน€เธย เนโ€โฌเนโ€โฌ
 	var reviewerRole string
 	var revieweeID int
 	switch reviewerID {
 	case renterUserID:
 		reviewerRole = "renter"
 		revieweeID = ownerUserID
-		// Renter รีวิวได้หลังจากได้รับอุปกรณ์แล้ว (Rental Active หรือ Rental Completed)
+		// Renter เน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ…เน€เธเธ‘เน€เธยเน€เธยเน€เธเธ’เน€เธยเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ‘เน€เธยเน€เธเธเน€เธเธเน€เธยเน€เธยเน€เธเธเน€เธโ€เน€เธยเน€เธยเน€เธเธ…เน€เธยเน€เธเธ (Rental Active เน€เธเธเน€เธเธเน€เธเธ—เน€เธเธ Rental Completed)
 		if status != "Rental Active" && status != "Rental Completed" {
 			respondWithError(w, http.StatusForbidden,
 				"Renter can only review after the device has been delivered (Rental Active or Rental Completed)", "")
@@ -257,7 +275,7 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 	case ownerUserID:
 		reviewerRole = "owner"
 		revieweeID = renterUserID
-		// Owner รีวิวได้หลังจากได้รับอุปกรณ์คืน (Rental Completed เท่านั้น)
+		// Owner เน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ…เน€เธเธ‘เน€เธยเน€เธยเน€เธเธ’เน€เธยเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ‘เน€เธยเน€เธเธเน€เธเธเน€เธยเน€เธยเน€เธเธเน€เธโ€เน€เธยเน€เธยเน€เธเธ—เน€เธย (Rental Completed เน€เธโฌเน€เธโ€”เน€เธยเน€เธเธ’เน€เธยเน€เธเธ‘เน€เธยเน€เธย)
 		if status != "Rental Completed" {
 			respondWithError(w, http.StatusForbidden,
 				"Owner can only review after the device has been returned (Rental Completed)", "")
@@ -268,14 +286,16 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// ── INSERT (unique constraint บล็อครีวิวซ้ำ) ──
+	// เนโ€โฌเนโ€โฌ INSERT (unique constraint เน€เธยเน€เธเธ…เน€เธยเน€เธเธเน€เธยเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธยเน€เธยเน€เธเธ“) เนโ€โฌเนโ€โฌ
 	var reviewNo int
 	err = rc.DB.QueryRow(`
 		INSERT INTO UserReview
-			(RequestNo, ReviewerUserId, RevieweeUserId, ReviewerRole, Rating, Description)
-		VALUES ($1, $2, $3, $4, $5, $6)
+			(RequestNo, ReviewerUserId, RevieweeUserId, ReviewerRole, Rating, Description,
+			 RatingCommunication, RatingPunctuality, RatingAccuracy, RatingCare)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING ReviewNo
-	`, req.RequestNo, reviewerID, revieweeID, reviewerRole, req.Rating, req.Description).Scan(&reviewNo)
+	`, req.RequestNo, reviewerID, revieweeID, reviewerRole, req.Rating, req.Description,
+		req.RatingCommunication, req.RatingPunctuality, req.RatingAccuracy, req.RatingCare).Scan(&reviewNo)
 	if err != nil {
 		if strings.Contains(err.Error(), "uq_ur_request_role") {
 			respondWithError(w, http.StatusConflict, "You have already reviewed this rental", "")
@@ -292,7 +312,7 @@ func (rc *ReviewController) CreateUserReview(w http.ResponseWriter, r *http.Requ
 }
 
 // CheckReviewEligibility handles GET /api/reviews/eligibility?requestNo=42
-// Frontend ใช้ disable/enable ปุ่มรีวิว
+// Frontend เน€เธยเน€เธยเน€เธย disable/enable เน€เธยเน€เธเธเน€เธยเน€เธเธเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธ
 func (rc *ReviewController) CheckReviewEligibility(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
@@ -334,7 +354,7 @@ func (rc *ReviewController) CheckReviewEligibility(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// ระบุ role
+	// เน€เธเธเน€เธเธเน€เธยเน€เธเธ role
 	var role string
 	switch reviewerID {
 	case renterUserID:
@@ -351,14 +371,14 @@ func (rc *ReviewController) CheckReviewEligibility(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// ตรวจว่ารีวิวซ้ำหรือยัง
+	// เน€เธโ€ขเน€เธเธเน€เธเธเน€เธยเน€เธเธเน€เธยเน€เธเธ’เน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธยเน€เธยเน€เธเธ“เน€เธเธเน€เธเธเน€เธเธ—เน€เธเธเน€เธเธเน€เธเธ‘เน€เธย
 	var alreadyReviewed bool
 	rc.DB.QueryRow(
 		`SELECT EXISTS(SELECT 1 FROM UserReview WHERE RequestNo = $1 AND ReviewerRole = $2)`,
 		requestNo, role,
 	).Scan(&alreadyReviewed)
 
-	// ตรวจเงื่อนไข status
+	// เน€เธโ€ขเน€เธเธเน€เธเธเน€เธยเน€เธโฌเน€เธยเน€เธเธ—เน€เธยเน€เธเธเน€เธยเน€เธยเน€เธย status
 	canReview := false
 	reason := ""
 	if alreadyReviewed {
@@ -383,7 +403,7 @@ func (rc *ReviewController) CheckReviewEligibility(w http.ResponseWriter, r *htt
 }
 
 // GetUserReviews handles GET /api/users/{userId}/reviews
-// ดูรีวิวทั้งหมดที่ user คนนี้ได้รับ (public)
+// เน€เธโ€เน€เธเธเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธโ€”เน€เธเธ‘เน€เธยเน€เธยเน€เธเธเน€เธเธเน€เธโ€เน€เธโ€”เน€เธเธ•เน€เธย user เน€เธยเน€เธยเน€เธยเน€เธเธ•เน€เธยเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ‘เน€เธย (public)
 // Optional query: ?role=owner|renter
 func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -410,12 +430,16 @@ func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Reques
 			ur.ReviewNo,
 			ur.RequestNo,
 			ur.ReviewerUserId,
-			COALESCE(au.Email, '')     AS ReviewerEmail,
+			COALESCE(au.Email, '')        AS ReviewerEmail,
 			ur.ReviewerRole,
 			ur.Rating,
-			COALESCE(ur.Description, '') AS Description,
-			COALESCE(ur.ReplyText, '')   AS ReplyText,
+			COALESCE(ur.Description, '')  AS Description,
+			COALESCE(ur.ReplyText, '')    AS ReplyText,
 			ur.RepliedAt,
+			ur.RatingCommunication,
+			ur.RatingPunctuality,
+			ur.RatingAccuracy,
+			ur.RatingCare,
 			ur.CreatedAt
 		FROM UserReview ur
 		LEFT JOIN AppUser au ON au.UserId = ur.ReviewerUserId
@@ -436,16 +460,20 @@ func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Reques
 	defer rows.Close()
 
 	type UserReviewEntry struct {
-		ReviewNo       int        `json:"reviewNo"`
-		RequestNo      int        `json:"requestNo"`
-		ReviewerUserId int        `json:"reviewerUserId"`
-		ReviewerEmail  string     `json:"reviewerEmail"`
-		ReviewerRole   string     `json:"reviewerRole"`
-		Rating         int        `json:"rating"`
-		Description    string     `json:"description"`
-		ReplyText      string     `json:"replyText"`
-		RepliedAt      *time.Time `json:"repliedAt"`
-		CreatedAt      time.Time  `json:"createdAt"`
+		ReviewNo            int        `json:"reviewNo"`
+		RequestNo           int        `json:"requestNo"`
+		ReviewerUserId      int        `json:"reviewerUserId"`
+		ReviewerEmail       string     `json:"reviewerEmail"`
+		ReviewerRole        string     `json:"reviewerRole"`
+		Rating              int        `json:"rating"`
+		Description         string     `json:"description"`
+		ReplyText           string     `json:"replyText"`
+		RepliedAt           *time.Time `json:"repliedAt"`
+		RatingCommunication *int       `json:"ratingCommunication"`
+		RatingPunctuality   *int       `json:"ratingPunctuality"`
+		RatingAccuracy      *int       `json:"ratingAccuracy"`
+		RatingCare          *int       `json:"ratingCare"`
+		CreatedAt           time.Time  `json:"createdAt"`
 	}
 
 	var reviews []UserReviewEntry
@@ -455,7 +483,10 @@ func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Reques
 			&entry.ReviewNo, &entry.RequestNo,
 			&entry.ReviewerUserId, &entry.ReviewerEmail, &entry.ReviewerRole,
 			&entry.Rating, &entry.Description,
-			&entry.ReplyText, &entry.RepliedAt, &entry.CreatedAt,
+			&entry.ReplyText, &entry.RepliedAt,
+			&entry.RatingCommunication, &entry.RatingPunctuality,
+			&entry.RatingAccuracy, &entry.RatingCare,
+			&entry.CreatedAt,
 		); err != nil {
 			fmt.Printf("Error scanning user review row: %v\n", err)
 			continue
@@ -466,11 +497,11 @@ func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Reques
 		reviews = []UserReviewEntry{}
 	}
 
-	// คำนวณ avg rating
+	// เน€เธยเน€เธเธ“เน€เธยเน€เธเธเน€เธโ€ avg rating
 	avgAsOwner, avgAsRenter := 0.0, 0.0
 	countOwner, countRenter := 0, 0
 	for _, rv := range reviews {
-		if rv.ReviewerRole == "renter" { // renter reviewed → owner avg
+		if rv.ReviewerRole == "renter" { // renter reviewed เนยโ€ owner avg
 			avgAsOwner += float64(rv.Rating)
 			countOwner++
 		} else {
@@ -494,7 +525,7 @@ func (rc *ReviewController) GetUserReviews(w http.ResponseWriter, r *http.Reques
 }
 
 // GetUserRating handles GET /api/users/{userId}/rating
-// ดึงค่าเฉลี่ย rating ของ user ทั้งในฐานะ Owner และ Renter (public)
+// เน€เธโ€เน€เธเธ–เน€เธยเน€เธยเน€เธยเน€เธเธ’เน€เธโฌเน€เธยเน€เธเธ…เน€เธเธ•เน€เธยเน€เธเธ rating เน€เธยเน€เธเธเน€เธย user เน€เธโ€”เน€เธเธ‘เน€เธยเน€เธยเน€เธยเน€เธยเน€เธยเน€เธเธ’เน€เธยเน€เธเธ Owner เน€เธยเน€เธเธ…เน€เธเธ Renter (public)
 func (rc *ReviewController) GetUserRating(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
@@ -540,7 +571,7 @@ func (rc *ReviewController) GetUserRating(w http.ResponseWriter, r *http.Request
 }
 
 // ReplyToReview handles PATCH /api/reviews/{reviewNo}/reply
-// Reviewee (ผู้ถูกรีวิว) ตอบกลับได้ครั้งเดียว
+// Reviewee (เน€เธยเน€เธเธเน€เธยเน€เธโ€“เน€เธเธเน€เธยเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธ) เน€เธโ€ขเน€เธเธเน€เธยเน€เธยเน€เธเธ…เน€เธเธ‘เน€เธยเน€เธยเน€เธโ€เน€เธยเน€เธยเน€เธเธเน€เธเธ‘เน€เธยเน€เธยเน€เธโฌเน€เธโ€เน€เธเธ•เน€เธเธเน€เธเธ
 func (rc *ReviewController) ReplyToReview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPatch {
 		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
@@ -575,7 +606,7 @@ func (rc *ReviewController) ReplyToReview(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// ตรวจว่า currentUser เป็น reviewee ของรีวิวนี้
+	// เน€เธโ€ขเน€เธเธเน€เธเธเน€เธยเน€เธเธเน€เธยเน€เธเธ’ currentUser เน€เธโฌเน€เธยเน€เธยเน€เธย reviewee เน€เธยเน€เธเธเน€เธยเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธยเน€เธเธ•เน€เธย
 	var revieweeID int
 	var existingReply sql.NullString
 	err = rc.DB.QueryRow(
@@ -611,7 +642,7 @@ func (rc *ReviewController) ReplyToReview(w http.ResponseWriter, r *http.Request
 }
 
 // GetRenterProfile handles GET /api/users/{userId}/renter-profile
-// ดึงข้อมูลโปรไฟล์ผู้เช่า พร้อม stats และรีวิวที่ได้รับในฐานะผู้เช่า (public)
+// เน€เธโ€เน€เธเธ–เน€เธยเน€เธยเน€เธยเน€เธเธเน€เธเธเน€เธเธเน€เธเธ…เน€เธยเน€เธยเน€เธเธเน€เธยเน€เธยเน€เธเธ…เน€เธยเน€เธยเน€เธเธเน€เธยเน€เธโฌเน€เธยเน€เธยเน€เธเธ’ เน€เธยเน€เธเธเน€เธยเน€เธเธเน€เธเธ stats เน€เธยเน€เธเธ…เน€เธเธเน€เธเธเน€เธเธ•เน€เธเธเน€เธเธ”เน€เธเธเน€เธโ€”เน€เธเธ•เน€เธยเน€เธยเน€เธโ€เน€เธยเน€เธเธเน€เธเธ‘เน€เธยเน€เธยเน€เธยเน€เธยเน€เธเธ’เน€เธยเน€เธเธเน€เธยเน€เธเธเน€เธยเน€เธโฌเน€เธยเน€เธยเน€เธเธ’ (public)
 func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondWithError(w, http.StatusMethodNotAllowed, "Method not allowed", "")
@@ -630,7 +661,7 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// ── 1. ดึงข้อมูลผู้ใช้จาก AppUser + Renter ──
+	// เนโ€โฌเนโ€โฌ 1. เน€เธโ€เน€เธเธ–เน€เธยเน€เธยเน€เธยเน€เธเธเน€เธเธเน€เธเธเน€เธเธ…เน€เธยเน€เธเธเน€เธยเน€เธยเน€เธยเน€เธยเน€เธยเน€เธเธ’เน€เธย AppUser + Renter เนโ€โฌเนโ€โฌ
 	var email string
 	var fname, lname, tel sql.NullString
 	err = rc.DB.QueryRow(`
@@ -651,14 +682,14 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// ── 2. Stats: totalCompletedRentals ──
+	// เนโ€โฌเนโ€โฌ 2. Stats: totalCompletedRentals เนโ€โฌเนโ€โฌ
 	var totalCompleted int
 	rc.DB.QueryRow(`
 		SELECT COUNT(*) FROM RentalRequest
 		WHERE RenterUserId = $1 AND Status = 'Rental Completed'
 	`, userID).Scan(&totalCompleted)
 
-	// ── 3. Stats: averageRating + reviewCount (owner reviewed renter) ──
+	// เนโ€โฌเนโ€โฌ 3. Stats: averageRating + reviewCount (owner reviewed renter) เนโ€โฌเนโ€โฌ
 	var avgRating sql.NullFloat64
 	var reviewCount int
 	rc.DB.QueryRow(`
@@ -672,7 +703,7 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 		avgRatingVal = avgRating.Float64
 	}
 
-	// ── 4. Reviews list ──
+	// เนโ€โฌเนโ€โฌ 4. Reviews list เนโ€โฌเนโ€โฌ
 	rows, err := rc.DB.Query(`
 		SELECT
 			ur.ReviewNo,
@@ -684,7 +715,11 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 				au_r.Email,
 				''
 			)                                                          AS ReviewerName,
-			ur.CreatedAt
+			ur.CreatedAt,
+			COALESCE(ur.RatingCommunication, 0) AS RatingCommunication,
+			COALESCE(ur.RatingPunctuality,   0) AS RatingPunctuality,
+			COALESCE(ur.RatingAccuracy,      0) AS RatingAccuracy,
+			COALESCE(ur.RatingCare,          0) AS RatingCare
 		FROM UserReview ur
 		LEFT JOIN RentalRequest rr ON rr.RequestNo = ur.RequestNo
 		LEFT JOIN Device d         ON d.DeviceNo = rr.DeviceNo
@@ -707,6 +742,10 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 		DeviceName   string    `json:"deviceName"`
 		ReviewerName string    `json:"reviewerName"`
 		CreatedAt    time.Time `json:"createdAt"`
+		RatingCommunication int `json:"ratingCommunication"`
+		RatingPunctuality   int `json:"ratingPunctuality"`
+		RatingAccuracy      int `json:"ratingAccuracy"`
+		RatingCare          int `json:"ratingCare"`
 	}
 
 	var reviews []ReviewItem
@@ -715,6 +754,7 @@ func (rc *ReviewController) GetRenterProfile(w http.ResponseWriter, r *http.Requ
 		if err := rows.Scan(
 			&item.ReviewID, &item.Rating, &item.ReviewText,
 			&item.DeviceName, &item.ReviewerName, &item.CreatedAt,
+			&item.RatingCommunication, &item.RatingPunctuality, &item.RatingAccuracy, &item.RatingCare,
 		); err != nil {
 			fmt.Printf("Error scanning renter profile review row: %v\n", err)
 			continue

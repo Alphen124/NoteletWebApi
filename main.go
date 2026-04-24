@@ -403,6 +403,23 @@ func main() {
 		fmt.Println("✓ Central staff column ready (is_central_staff)")
 	}
 
+	// Migration 012: Sub-rating columns for deeper per-criterion reviews
+	subRatingMigrationSQL := `
+		ALTER TABLE UserReview
+			ADD COLUMN IF NOT EXISTS RatingCommunication INTEGER CHECK (RatingCommunication BETWEEN 1 AND 5),
+			ADD COLUMN IF NOT EXISTS RatingPunctuality   INTEGER CHECK (RatingPunctuality   BETWEEN 1 AND 5),
+			ADD COLUMN IF NOT EXISTS RatingAccuracy      INTEGER CHECK (RatingAccuracy      BETWEEN 1 AND 5),
+			ADD COLUMN IF NOT EXISTS RatingCare          INTEGER CHECK (RatingCare          BETWEEN 1 AND 5);
+		ALTER TABLE Review
+			ADD COLUMN IF NOT EXISTS RatingCondition INTEGER CHECK (RatingCondition BETWEEN 1 AND 5),
+			ADD COLUMN IF NOT EXISTS RatingValue     INTEGER CHECK (RatingValue     BETWEEN 1 AND 5);
+	`
+	if _, err := db.Exec(subRatingMigrationSQL); err != nil {
+		fmt.Printf("Warning: sub-rating migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ Sub-rating columns ready (Review.RatingCondition/Value, UserReview.RatingCommunication/Punctuality/Accuracy/Care)")
+	}
+
 	// ============================================================
 	// Admin accounts seed (สร้าง 3 บัญชี admin ถ้ายังไม่มี)
 	// ============================================================
@@ -498,6 +515,26 @@ func main() {
 		}
 	}
 
+	// Migration: DeviceEvent table for recommendation system
+	deviceEventMigrationSQL := `
+		CREATE TABLE IF NOT EXISTS DeviceEvent (
+			EventNo   SERIAL PRIMARY KEY,
+			UserId    INTEGER NOT NULL REFERENCES AppUser(UserId) ON DELETE CASCADE,
+			DeviceNo  INTEGER NOT NULL REFERENCES Device(DeviceNo) ON DELETE CASCADE,
+			EventType VARCHAR(20) NOT NULL DEFAULT 'view'
+			          CHECK (EventType IN ('view','click','rent')),
+			CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_de_user   ON DeviceEvent(UserId);
+		CREATE INDEX IF NOT EXISTS idx_de_device ON DeviceEvent(DeviceNo);
+		CREATE INDEX IF NOT EXISTS idx_de_time   ON DeviceEvent(CreatedAt DESC);
+	`
+	if _, err := db.Exec(deviceEventMigrationSQL); err != nil {
+		fmt.Printf("Warning: DeviceEvent migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ DeviceEvent table ready (recommendation system)")
+	}
+
 	// สร้าง controllers
 	authController := controllers.NewAuthController(db)
 	oauthController := controllers.NewOAuthController(db)
@@ -508,12 +545,14 @@ func main() {
 	reviewController := controllers.NewReviewController(db)
 	rentalController := controllers.NewRentalController(db)
 	chatController := controllers.NewChatController(db)
+	recommendationController := controllers.NewRecommendationController(db)
+	adminController := controllers.NewAdminController(db)
 
 	// Create a new router
 	mux := http.NewServeMux()
 
 	// Setup API routes first
-	apiMux := routers.SetupRoutes(authController, oauthController, firebaseController, supabaseController, deviceController, uploadController, reviewController, rentalController, chatController)
+	apiMux := routers.SetupRoutes(authController, oauthController, firebaseController, supabaseController, deviceController, uploadController, reviewController, rentalController, chatController, recommendationController, adminController)
 
 	// Mount API routes
 	mux.Handle("/api/", apiMux)

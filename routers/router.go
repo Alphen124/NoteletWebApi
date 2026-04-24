@@ -9,7 +9,7 @@ import (
 )
 
 // SetupRoutes กำหนด routes สำหรับ API
-func SetupRoutes(authController *controllers.AuthController, oauthController *controllers.OAuthController, firebaseController *controllers.FirebaseAuthController, supabaseController *controllers.SupabaseAuthController, deviceController *controllers.DeviceController, uploadController *controllers.UploadController, reviewController *controllers.ReviewController, rentalController *controllers.RentalController, chatController *controllers.ChatController) *http.ServeMux {
+func SetupRoutes(authController *controllers.AuthController, oauthController *controllers.OAuthController, firebaseController *controllers.FirebaseAuthController, supabaseController *controllers.SupabaseAuthController, deviceController *controllers.DeviceController, uploadController *controllers.UploadController, reviewController *controllers.ReviewController, rentalController *controllers.RentalController, chatController *controllers.ChatController, recommendationController *controllers.RecommendationController, adminController *controllers.AdminController) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Public routes (ไม่ต้องการ authentication)
@@ -211,6 +211,66 @@ func SetupRoutes(authController *controllers.AuthController, oauthController *co
 		}
 		http.Error(w, "Not found", http.StatusNotFound)
 	})
+
+	// ─── Recommendation routes (protected) ──────────────────────────────────
+	// POST /api/devices/events  → บันทึก interaction ของ user (view/click/rent)
+	// GET  /api/recommendations → ดึงรายการ device แนะนำสำหรับ user ที่ login
+	recMux := http.NewServeMux()
+	recMux.HandleFunc("/api/devices/events", recommendationController.LogEvent)
+	recMux.HandleFunc("/api/recommendations", recommendationController.GetRecommendations)
+	recMux.HandleFunc("/api/recommendations/metrics", recommendationController.GetMetrics)
+	recMux.HandleFunc("/api/recommendations/seed-test-data", recommendationController.SeedTestData)
+	mux.Handle("/api/devices/events", middlewares.CORSMiddleware(middlewares.AuthMiddleware(recMux)))
+	mux.Handle("/api/recommendations", middlewares.CORSMiddleware(middlewares.AuthMiddleware(recMux)))
+	mux.Handle("/api/recommendations/metrics", middlewares.CORSMiddleware(middlewares.AuthMiddleware(recMux)))
+	mux.Handle("/api/recommendations/seed-test-data", middlewares.CORSMiddleware(middlewares.AuthMiddleware(recMux)))
+
+	// ─── Admin routes (auth + admin role required) ───────────────────────────
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("/api/admin/stats", adminController.GetAdminStats)
+	adminMux.HandleFunc("/api/admin/users", adminController.GetAllUsers)
+	adminMux.HandleFunc("/api/admin/devices", adminController.GetAllDevicesAdmin)
+	adminMux.HandleFunc("/api/admin/rentals", adminController.GetAllRentals)
+	adminMux.HandleFunc("/api/admin/users/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/set-staff") && r.Method == http.MethodPatch {
+			adminController.SetStaffRole(w, r)
+		} else if strings.HasSuffix(path, "/set-active") && r.Method == http.MethodPatch {
+			adminController.SetActiveStatus(w, r)
+		} else if strings.HasSuffix(path, "/set-admin") && r.Method == http.MethodPatch {
+			adminController.SetAdminRole(w, r)
+		} else if r.Method == http.MethodPut {
+			adminController.UpdateUserProfile(w, r)
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	})
+	adminMux.HandleFunc("/api/admin/devices/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			adminController.AdminDeleteDevice(w, r)
+		} else if r.Method == http.MethodPut {
+			adminController.AdminUpdateDevice(w, r)
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	})
+	adminMux.HandleFunc("/api/admin/rentals/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if strings.HasSuffix(path, "/status") && r.Method == http.MethodPatch {
+			adminController.UpdateRentalStatus(w, r)
+		} else {
+			http.Error(w, "Not found", http.StatusNotFound)
+		}
+	})
+
+	adminChain := middlewares.CORSMiddleware(middlewares.AuthMiddleware(middlewares.AdminMiddleware(adminMux)))
+	mux.Handle("/api/admin/stats", adminChain)
+	mux.Handle("/api/admin/users", adminChain)
+	mux.Handle("/api/admin/users/", adminChain)
+	mux.Handle("/api/admin/devices", adminChain)
+	mux.Handle("/api/admin/devices/", adminChain)
+	mux.Handle("/api/admin/rentals", adminChain)
+	mux.Handle("/api/admin/rentals/", adminChain)
 
 	return mux
 }

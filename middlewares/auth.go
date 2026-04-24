@@ -64,6 +64,22 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// AdminMiddleware middleware สำหรับตรวจสอบว่าผู้ใช้เป็น admin
+func AdminMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userCtx, ok := r.Context().Value(UserContextKey).(UserContext)
+		if !ok {
+			respondWithError(w, http.StatusUnauthorized, "User context not found")
+			return
+		}
+		if !userCtx.IsAdmin {
+			respondWithError(w, http.StatusForbidden, "Admin access required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // KMITLEmailMiddleware middleware สำหรับตรวจสอบว่าเป็นอีเมล @kmitl.ac.th
 func KMITLEmailMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
