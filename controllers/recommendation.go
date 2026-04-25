@@ -282,11 +282,65 @@ func (rc *RecommendationController) GetRecommendations(w http.ResponseWriter, r 
 		allDevices = append(allDevices, d)
 	}
 
-	// ── 6. Score candidates ───────────────────────────────────────────────────
+	// ── 5b. User-based CF: precompute similar users ───────────────────────────
 	userVector := matrix[userID]
+	userNormMap := make(map[int]float64)
+	for uid, uMap := range matrix {
+		var n float64
+		for _, s := range uMap {
+			n += s * s
+		}
+		userNormMap[uid] = math.Sqrt(n)
+	}
+	type userSimPair struct {
+		uid int
+		sim float64
+	}
+	var simUsers []userSimPair
+	uNorm := userNormMap[userID]
+	for uid, uMap := range matrix {
+		if uid == userID {
+			continue
+		}
+		var dot float64
+		for did, s1 := range userVector {
+			if s2, ok2 := uMap[did]; ok2 {
+				dot += s1 * s2
+			}
+		}
+		sim := dot / (uNorm*userNormMap[uid] + 1e-9)
+		if sim > 0.01 {
+			simUsers = append(simUsers, userSimPair{uid, sim})
+		}
+	}
+	sort.Slice(simUsers, func(i, j int) bool { return simUsers[i].sim > simUsers[j].sim })
+	const maxSimUsers = 20
+	if len(simUsers) > maxSimUsers {
+		simUsers = simUsers[:maxSimUsers]
+	}
+	ucfRaw := make(map[int]float64)
+	for _, su := range simUsers {
+		for did, s := range matrix[su.uid] {
+			ucfRaw[did] += su.sim * s
+		}
+	}
+	var maxUCF float64
+	for _, s := range ucfRaw {
+		if s > maxUCF {
+			maxUCF = s
+		}
+	}
+	if maxUCF > 0 {
+		for did := range ucfRaw {
+			ucfRaw[did] /= maxUCF
+		}
+	}
+
+	// ── 6. Score candidates (Item-CF×uScore + Content×uScore + Pop + UserCF) ──
 	candidateScores := make(map[int]float64)
 
 	if len(userVector) > 0 {
+		// Item-based CF + Content-based, each weighted by user's interaction strength
 		for interacted, uScore := range userVector {
 			if uScore < 0.05 {
 				continue
@@ -295,17 +349,30 @@ func (rc *RecommendationController) GetRecommendations(w http.ResponseWriter, r 
 				if userVector[candidate] > 0 {
 					continue // already interacted
 				}
-				cs := collabSim(interacted, candidate)
-				cnt := contentSim(interacted, candidate)
-				pop := popularity[candidate]
-				score := 0.4*cs + 0.3*cnt + 0.2*pop
+				cs := uScore * collabSim(interacted, candidate)
+				cnt := uScore * contentSim(interacted, candidate)
+				candidateScores[candidate] += 0.40*cs + 0.25*cnt
+			}
+		}
+		// Popularity + User-based CF: global components, added once (not per interaction)
+		for _, candidate := range allDevices {
+			if userVector[candidate] > 0 {
+				continue
+			}
+			candidateScores[candidate] += 0.15*popularity[candidate] + 0.20*ucfRaw[candidate]
+		}
+	} else {
+		// Cold-start: popularity-based ranking
+		for _, candidate := range allDevices {
+			candidateScores[candidate] = popularity[candidate]
+		}
+	}
 
-				if favType > 0 {
-					if meta, ok := itemMeta[candidate]; ok && meta.TypeNo == favType {
-						score *= 1.3
-					}
-				}
-				candidateScores[candidate] += score
+	// Fav type boost (applied once after all score components are accumulated)
+	if favType > 0 {
+		for candidate := range candidateScores {
+			if meta, ok2 := itemMeta[candidate]; ok2 && meta.TypeNo == favType {
+				candidateScores[candidate] *= 1.3
 			}
 		}
 	}
@@ -538,6 +605,16 @@ func (rc *RecommendationController) GetMetrics(w http.ResponseWriter, r *http.Re
 		trainNorm[did] = math.Sqrt(n)
 	}
 
+	// User norms for user-based CF during metrics evaluation
+	trainUserNorm := make(map[int]float64)
+	for uid, uMap := range trainMatrix {
+		var n float64
+		for _, s := range uMap {
+			n += s * s
+		}
+		trainUserNorm[uid] = math.Sqrt(n)
+	}
+
 	mCollabSim := func(i, j int) float64 {
 		vi, oki := trainItemVec[i]
 		vj, okj := trainItemVec[j]
@@ -590,11 +667,12 @@ func (rc *RecommendationController) GetMetrics(w http.ResponseWriter, r *http.Re
 		DeviceNo int
 		Score    float64
 	}
-	scoreUser := func(userID int) []rankedItem {
+	scoreUser := func(uid int) []rankedItem {
 		scores := make(map[int]float64)
+
 		// Fav type from training
 		typeScoreMap := make(map[int]float64)
-		if uMap, ok2 := trainMatrix[userID]; ok2 {
+		if uMap, ok2 := trainMatrix[uid]; ok2 {
 			for did, s := range uMap {
 				if meta, ok3 := trainMeta[did]; ok3 && meta.TypeNo > 0 {
 					typeScoreMap[meta.TypeNo] += s
@@ -609,24 +687,66 @@ func (rc *RecommendationController) GetMetrics(w http.ResponseWriter, r *http.Re
 				favType = t
 			}
 		}
-		userVector := trainMatrix[userID]
-		if len(userVector) > 0 {
-			for interacted, uScore := range userVector {
+
+		uVec := trainMatrix[uid]
+		if len(uVec) > 0 {
+			// Item-based CF + Content-based, weighted by user's interaction strength
+			for interacted, uScore := range uVec {
 				if uScore < 0.05 {
 					continue
 				}
 				for _, candidate := range allTrainDevices {
-					cs := mCollabSim(interacted, candidate)
-					cnt := mContentSim(interacted, candidate)
-					pop := trainPop[candidate]
-					s := 0.4*cs + 0.3*cnt + 0.2*pop
-					if favType > 0 {
-						if meta, ok2 := trainMeta[candidate]; ok2 && meta.TypeNo == favType {
-							s *= 1.3
-						}
-					}
-					scores[candidate] += s
+					cs := uScore * mCollabSim(interacted, candidate)
+					cnt := uScore * mContentSim(interacted, candidate)
+					scores[candidate] += 0.40*cs + 0.25*cnt
 				}
+			}
+			// User-based CF: find top-20 similar training users
+			type usPair struct {
+				id  int
+				sim float64
+			}
+			var simUs []usPair
+			uNorm1 := trainUserNorm[uid]
+			for other, oMap := range trainMatrix {
+				if other == uid {
+					continue
+				}
+				var dot float64
+				for did, s1 := range uVec {
+					if s2, ok2 := oMap[did]; ok2 {
+						dot += s1 * s2
+					}
+				}
+				sim := dot / (uNorm1*trainUserNorm[other] + 1e-9)
+				if sim > 0.01 {
+					simUs = append(simUs, usPair{other, sim})
+				}
+			}
+			sort.Slice(simUs, func(i, j int) bool { return simUs[i].sim > simUs[j].sim })
+			if len(simUs) > 20 {
+				simUs = simUs[:20]
+			}
+			ucfRaw := make(map[int]float64)
+			for _, su := range simUs {
+				for did, s := range trainMatrix[su.id] {
+					ucfRaw[did] += su.sim * s
+				}
+			}
+			var maxUCF float64
+			for _, s := range ucfRaw {
+				if s > maxUCF {
+					maxUCF = s
+				}
+			}
+			if maxUCF > 0 {
+				for _, candidate := range allTrainDevices {
+					scores[candidate] += 0.20 * (ucfRaw[candidate] / maxUCF)
+				}
+			}
+			// Global: popularity (added once)
+			for _, candidate := range allTrainDevices {
+				scores[candidate] += 0.15 * trainPop[candidate]
 			}
 		} else {
 			// Cold-start: popularity only
@@ -634,6 +754,16 @@ func (rc *RecommendationController) GetMetrics(w http.ResponseWriter, r *http.Re
 				scores[candidate] = trainPop[candidate]
 			}
 		}
+
+		// Fav type boost (applied once after all components are accumulated)
+		if favType > 0 {
+			for candidate := range scores {
+				if meta, ok2 := trainMeta[candidate]; ok2 && meta.TypeNo == favType {
+					scores[candidate] *= 1.3
+				}
+			}
+		}
+
 		ranked := make([]rankedItem, 0, len(scores))
 		for d, s := range scores {
 			ranked = append(ranked, rankedItem{d, s})
@@ -774,8 +904,8 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 		rc.DB.Exec(`DELETE FROM DeviceEvent`)
 	}
 
-	// ── Load real device IDs grouped by type ─────────────────────────────────
-	devRows, err := rc.DB.Query(`SELECT DeviceNo, COALESCE(DeviceTypeNo, 0) FROM Device ORDER BY DeviceNo`)
+	// ── Load real device IDs grouped by type (up to 100) ────────────────────
+	devRows, err := rc.DB.Query(`SELECT DeviceNo, COALESCE(DeviceTypeNo, 0) FROM Device ORDER BY DeviceNo LIMIT 100`)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to query devices", err.Error())
 		return
@@ -807,8 +937,8 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 	}
 	sort.Ints(typeKeys)
 
-	// ── Load real user IDs ────────────────────────────────────────────────────
-	userRows, err := rc.DB.Query(`SELECT userid FROM appuser ORDER BY userid LIMIT 20`)
+	// ── Load real user IDs (up to 500) ─────────────────────────────────────
+	userRows, err := rc.DB.Query(`SELECT userid FROM appuser ORDER BY userid LIMIT 500`)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to query users", err.Error())
 		return
@@ -827,11 +957,25 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// ── Generate synthetic events ─────────────────────────────────────────────
+	// ── Generate synthetic events targeting ~5000 total ─────────────────────
+	const targetTrainEvents = 5000
 	rng := rand.New(rand.NewSource(42))
 	now := time.Now()
 
-	// Pick event type with realistic distribution: 60% view, 30% click, 10% rent
+	// Events per user for training (clamped 5–200)
+	eventsPerUserTrain := targetTrainEvents / len(userIDs)
+	if eventsPerUserTrain < 5 {
+		eventsPerUserTrain = 5
+	}
+	if eventsPerUserTrain > 200 {
+		eventsPerUserTrain = 200
+	}
+	eventsPerUserTest := eventsPerUserTrain / 4
+	if eventsPerUserTest < 2 {
+		eventsPerUserTest = 2
+	}
+
+	// Pick event type: 60% view, 30% click, 10% rent
 	pickEvent := func() string {
 		v := rng.Float64()
 		if v < 0.60 {
@@ -842,7 +986,6 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 		return "rent"
 	}
 
-	// Each user gets a preferred type cluster
 	type seedEvent struct {
 		UserID    int
 		DeviceNo  int
@@ -852,10 +995,14 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 	var events []seedEvent
 
 	for idx, uid := range userIDs {
-		// Assign preferred type
-		prefTypeIdx := idx % len(typeKeys)
-		prefType := typeKeys[prefTypeIdx]
-		prefDevices := typeGroups[prefType]
+		// Assign preferred type cluster (round-robin)
+		prefType := typeKeys[idx%len(typeKeys)]
+
+		// Make a local copy so shuffle doesn't mutate the shared slice
+		rawPref := typeGroups[prefType]
+		prefDevices := make([]int, len(rawPref))
+		copy(prefDevices, rawPref)
+		rng.Shuffle(len(prefDevices), func(i, j int) { prefDevices[i], prefDevices[j] = prefDevices[j], prefDevices[i] })
 
 		// Collect non-preferred devices
 		var otherDevices []int
@@ -865,76 +1012,47 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 			}
 		}
 
-		// ── Training events: days -90 to -15 ──────────────────────────────────
-		// Each user interacts with 60% of preferred devices + a few others in training
-		rng.Shuffle(len(prefDevices), func(i, j int) { prefDevices[i], prefDevices[j] = prefDevices[j], prefDevices[i] })
-		trainCount := int(float64(len(prefDevices)) * 0.60)
-		if trainCount < 2 {
-			trainCount = len(prefDevices)
+		// Split preferred devices: 70% for training, 30% for test (held-out)
+		trainSplit := int(float64(len(prefDevices)) * 0.70)
+		if trainSplit < 1 {
+			trainSplit = 1
 		}
-		trainDevices := prefDevices[:trainCount]
+		if trainSplit >= len(prefDevices) && len(prefDevices) > 1 {
+			trainSplit = len(prefDevices) - 1
+		}
+		trainPrefDevices := prefDevices[:trainSplit]
+		testPrefDevices := prefDevices[trainSplit:]
 
-		// Add a couple of random non-preferred for diversity
+		// ── Training events: days -90 to -15 (~2.5 months of history) ──────
+		// Cycle through trainPrefDevices to reach eventsPerUserTrain
+		for i := 0; i < eventsPerUserTrain; i++ {
+			did := trainPrefDevices[i%len(trainPrefDevices)]
+			daysAgo := 15 + rng.Intn(75) // -90 to -15
+			t := now.AddDate(0, 0, -daysAgo).Add(-time.Duration(rng.Intn(86400)) * time.Second)
+			events = append(events, seedEvent{uid, did, pickEvent(), t})
+		}
+		// Cross-type interactions: 20% of training volume for diversity
 		if len(otherDevices) > 0 {
-			extras := 2
-			if extras > len(otherDevices) {
-				extras = len(otherDevices)
+			crossCount := eventsPerUserTrain / 5
+			if crossCount < 1 {
+				crossCount = 1
 			}
-			rng.Shuffle(len(otherDevices), func(i, j int) { otherDevices[i], otherDevices[j] = otherDevices[j], otherDevices[i] })
-			trainDevices = append(trainDevices, otherDevices[:extras]...)
-		}
-
-		for _, did := range trainDevices {
-			// Random day between -90 and -15 (training period)
-			daysAgo := 15 + rng.Intn(75)
-			t := now.AddDate(0, 0, -daysAgo).Add(-time.Duration(rng.Intn(86400)) * time.Second)
-			events = append(events, seedEvent{uid, did, pickEvent(), t})
-			// Some devices get multiple events (simulate interest)
-			if rng.Float64() < 0.30 {
-				t2 := t.Add(time.Duration(rng.Intn(3600)+1) * time.Second)
-				events = append(events, seedEvent{uid, did, pickEvent(), t2})
+			for i := 0; i < crossCount; i++ {
+				did := otherDevices[i%len(otherDevices)]
+				daysAgo := 15 + rng.Intn(75)
+				t := now.AddDate(0, 0, -daysAgo).Add(-time.Duration(rng.Intn(86400)) * time.Second)
+				events = append(events, seedEvent{uid, did, pickEvent(), t})
 			}
 		}
 
-		// ── Test events: days -14 to -1 ───────────────────────────────────────
-		// 80% from preferred type (items NOT seen in training), 20% random
-		trainingSet := make(map[int]bool)
-		for _, did := range trainDevices {
-			trainingSet[did] = true
-		}
-		var unseenPref []int
-		for _, did := range prefDevices {
-			if !trainingSet[did] {
-				unseenPref = append(unseenPref, did)
+		// ── Test events: days -14 to -1 (from held-out preferred devices) ────
+		if len(testPrefDevices) > 0 {
+			for i := 0; i < eventsPerUserTest; i++ {
+				did := testPrefDevices[i%len(testPrefDevices)]
+				daysAgo := 1 + rng.Intn(13) // -14 to -1
+				t := now.AddDate(0, 0, -daysAgo).Add(-time.Duration(rng.Intn(86400)) * time.Second)
+				events = append(events, seedEvent{uid, did, pickEvent(), t})
 			}
-		}
-
-		testDevices := []int{}
-		// Up to 3 unseen preferred
-		if len(unseenPref) > 0 {
-			rng.Shuffle(len(unseenPref), func(i, j int) { unseenPref[i], unseenPref[j] = unseenPref[j], unseenPref[i] })
-			n := 3
-			if n > len(unseenPref) {
-				n = len(unseenPref)
-			}
-			testDevices = append(testDevices, unseenPref[:n]...)
-		}
-		// 1 random unseen from other types
-		var unseenOther []int
-		for _, did := range otherDevices {
-			if !trainingSet[did] {
-				unseenOther = append(unseenOther, did)
-			}
-		}
-		if len(unseenOther) > 0 {
-			rng.Shuffle(len(unseenOther), func(i, j int) { unseenOther[i], unseenOther[j] = unseenOther[j], unseenOther[i] })
-			testDevices = append(testDevices, unseenOther[0])
-		}
-
-		for _, did := range testDevices {
-			daysAgo := 1 + rng.Intn(13) // -14 to -1 days
-			t := now.AddDate(0, 0, -daysAgo).Add(-time.Duration(rng.Intn(86400)) * time.Second)
-			events = append(events, seedEvent{uid, did, pickEvent(), t})
 		}
 	}
 
@@ -964,9 +1082,11 @@ func (rc *RecommendationController) SeedTestData(w http.ResponseWriter, r *http.
 	}
 
 	respondWithSuccess(w, http.StatusOK, "Seed data inserted", map[string]interface{}{
-		"inserted_events": inserted,
-		"users":           len(userIDs),
-		"devices":         len(allDevs),
-		"type_groups":     len(typeGroups),
+		"inserted_events":       inserted,
+		"users":                 len(userIDs),
+		"devices":               len(allDevs),
+		"type_groups":           len(typeGroups),
+		"events_per_user_train": eventsPerUserTrain,
+		"events_per_user_test":  eventsPerUserTest,
 	})
 }
