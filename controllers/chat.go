@@ -7,11 +7,12 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	cloudinarysvc "noteletwebservice-development/services/cloudinary"
 
 	"noteletwebservice-development/middlewares"
 	"noteletwebservice-development/services/jwt"
@@ -724,32 +725,22 @@ func (cc *ChatController) UploadChatImage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Create uploads/chat directory
-	chatDir := "./uploads/chat"
-	if err := os.MkdirAll(chatDir, 0755); err != nil {
-		http.Error(w, "could not create upload directory", http.StatusInternalServerError)
-		return
-	}
+	// Combine buffered bytes with the rest of the file
+	combined := io.MultiReader(strings.NewReader(string(buf[:n])), file)
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
 	if ext == "" {
 		ext = ".jpg"
 	}
-	filename := fmt.Sprintf("chat_%d%s", time.Now().UnixNano(), ext)
-	dst, err := os.Create(filepath.Join(chatDir, filename))
+	publicID := fmt.Sprintf("chat_%d", time.Now().UnixNano())
+	imageURL, err := cloudinarysvc.UploadImage(r.Context(), combined, publicID, "notelet/chat")
 	if err != nil {
-		http.Error(w, "could not save file", http.StatusInternalServerError)
+		http.Error(w, "could not upload image: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	defer dst.Close()
 
-	// Write buffered bytes first, then the rest
-	dst.Write(buf[:n])
-	io.Copy(dst, file)
-
-	imagePath := "/uploads/chat/" + filename
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"url": imagePath})
+	json.NewEncoder(w).Encode(map[string]string{"url": imageURL})
 }
 
 // ─────────────────────────────────────────────

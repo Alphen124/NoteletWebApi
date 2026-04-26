@@ -2,14 +2,13 @@ package controllers
 
 import (
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"noteletwebservice-development/middlewares"
+	cloudinarysvc "noteletwebservice-development/services/cloudinary"
 )
 
 // UploadController handles file upload operations
@@ -19,10 +18,6 @@ type UploadController struct {
 
 // NewUploadController creates a new upload controller
 func NewUploadController(uploadDir string) *UploadController {
-	// Create upload directory if it doesn't exist
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		fmt.Printf("Warning: Failed to create upload directory: %v\n", err)
-	}
 	return &UploadController{UploadDir: uploadDir}
 }
 
@@ -82,12 +77,6 @@ func (uc *UploadController) UploadImages(w http.ResponseWriter, r *http.Request)
 			return
 		}
 
-		// Generate unique filename
-		timestamp := time.Now().Unix()
-		randomStr := fmt.Sprintf("%d_%d", userCtx.UserId, timestamp)
-		filename := fmt.Sprintf("%s_%s%s", randomStr, sanitizeFilename(fileHeader.Filename), ext)
-		filepath := filepath.Join(uc.UploadDir, filename)
-
 		// Open uploaded file
 		file, err := fileHeader.Open()
 		if err != nil {
@@ -96,25 +85,16 @@ func (uc *UploadController) UploadImages(w http.ResponseWriter, r *http.Request)
 		}
 		defer file.Close()
 
-		// Create destination file
-		dst, err := os.Create(filepath)
+		// Upload to Cloudinary
+		publicID := fmt.Sprintf("%d_%d_%s", userCtx.UserId, time.Now().Unix(), sanitizeFilename(fileHeader.Filename))
+		imageUrl, err := cloudinarysvc.UploadImage(r.Context(), file, publicID, "notelet/devices")
 		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, "Failed to create file", err.Error())
-			return
-		}
-		defer dst.Close()
-
-		// Copy file content
-		_, err = io.Copy(dst, file)
-		if err != nil {
-			respondWithError(w, http.StatusInternalServerError, "Failed to save file", err.Error())
+			respondWithError(w, http.StatusInternalServerError, "Failed to upload image", err.Error())
 			return
 		}
 
-		// Generate relative URL (served via proxy at /uploads/)
-		imageUrl := fmt.Sprintf("/uploads/%s", filename)
 		uploadedUrls = append(uploadedUrls, imageUrl)
-		fmt.Printf("Uploaded image: %s (%d bytes)\n", imageUrl, fileHeader.Size)
+		fmt.Printf("Uploaded image to Cloudinary: %s\n", imageUrl)
 	}
 
 	respondWithSuccess(w, http.StatusOK, "Images uploaded successfully", map[string]interface{}{
