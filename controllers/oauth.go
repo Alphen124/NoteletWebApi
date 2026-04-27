@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 
 	"noteletwebservice-development/models"
@@ -36,7 +37,7 @@ func (oc *OAuthController) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    state,
 		MaxAge:   300, // 5 minutes
 		HttpOnly: true,
-		Secure:   false, // ควรเป็น true ใน production (HTTPS)
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -50,8 +51,12 @@ func (oc *OAuthController) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 // GoogleCallback รับ callback จาก Google OAuth
 func (oc *OAuthController) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	// helper: redirect กลับ login page พร้อม error message
+	frontendURL := os.Getenv("FRONTEND_URL")
+	if frontendURL == "" {
+		frontendURL = "http://localhost:5500"
+	}
 	redirectError := func(msg string) {
-		http.Redirect(w, r, "/features/auth/login.html?error="+url.QueryEscape(msg), http.StatusTemporaryRedirect)
+		http.Redirect(w, r, frontendURL+"/features/auth/login.html?error="+url.QueryEscape(msg), http.StatusTemporaryRedirect)
 	}
 
 	// ตรวจสอบ state token
@@ -200,7 +205,7 @@ func (oc *OAuthController) GoogleCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 	encoded := base64.StdEncoding.EncodeToString(jsonBytes)
-	http.Redirect(w, r, "/features/auth/oauth-callback.html?data="+url.QueryEscape(encoded), http.StatusTemporaryRedirect)
+	http.Redirect(w, r, frontendURL+"/features/auth/oauth-callback.html?data="+url.QueryEscape(encoded), http.StatusTemporaryRedirect)
 }
 
 // createUserFromGoogle สร้างบัญชีผู้ใช้ใหม่จากข้อมูล Google
