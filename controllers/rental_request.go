@@ -94,7 +94,10 @@ func (rc *RentalController) CreateRentalRequest(w http.ResponseWriter, r *http.R
 	}
 
 	// Lazy-create Renter profile so joins work correctly later.
-	rc.DB.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", renterUserID)
+	if _, err = rc.DB.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", renterUserID); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create renter profile", err.Error())
+		return
+	}
 
 	var requestNo int
 	err = rc.DB.QueryRow(`
@@ -537,7 +540,10 @@ func (rc *RentalController) ConfirmRequest(w http.ResponseWriter, r *http.Reques
 	defer tx.Rollback() // no-op after Commit
 
 	// Step 1 – Ensure Renter profile exists (lazy upsert).
-	tx.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", renterUserID)
+	if _, err = tx.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", renterUserID); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create renter profile", err.Error())
+		return
+	}
 	var renterNo int
 	if err = tx.QueryRow(
 		"SELECT RenterNo FROM Renter WHERE UserId = $1", renterUserID,
@@ -1087,7 +1093,10 @@ func (rc *RentalController) ConfirmRentalFromChat(w http.ResponseWriter, r *http
 	defer tx.Rollback()
 
 	// ขั้นที่ 1 — Ensure Renter profile exists
-	tx.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", req.RenterUserID)
+	if _, err = tx.Exec("INSERT INTO Renter (UserId) VALUES ($1) ON CONFLICT (UserId) DO NOTHING", req.RenterUserID); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to create renter profile", err.Error())
+		return
+	}
 	var renterNo int
 	if err = tx.QueryRow(
 		"SELECT RenterNo FROM Renter WHERE UserId = $1", req.RenterUserID,

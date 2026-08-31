@@ -158,6 +158,7 @@ func main() {
 		`CREATE SEQUENCE IF NOT EXISTS seq_renter_no`,
 		`SELECT setval('seq_renter_no', GREATEST(COALESCE((SELECT MAX(RenterNo) FROM Renter), 0) + 1, 1), false)`,
 		`ALTER TABLE Renter ALTER COLUMN RenterNo SET DEFAULT nextval('seq_renter_no')`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_renter_userid ON Renter (UserId)`,
 		`CREATE SEQUENCE IF NOT EXISTS seq_statushistory_no`,
 		`SELECT setval('seq_statushistory_no', GREATEST(COALESCE((SELECT MAX(HistoryNo) FROM StatusHistory), 0) + 1, 1), false)`,
 		`ALTER TABLE StatusHistory ALTER COLUMN HistoryNo SET DEFAULT nextval('seq_statushistory_no')`,
