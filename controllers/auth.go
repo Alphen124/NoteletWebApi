@@ -479,7 +479,7 @@ func (ac *AuthController) AdminRegister(w http.ResponseWriter, r *http.Request) 
 	var userId int
 	err = tx.QueryRow(`
 		INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, role, createdat)
-		VALUES ($1, $2, $3, $4, $5, 'admin', NOW())
+		VALUES ($1, $2, $3, $4, $5, 'user', NOW())
 		RETURNING userid
 	`, strings.ToLower(req.Email), hashedPassword, true, true, req.IsCentralStaff).Scan(&userId)
 	if err != nil {

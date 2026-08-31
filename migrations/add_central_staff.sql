@@ -13,10 +13,10 @@ VALUES (
     true,
     false,
     true,
-    'admin',
+    'user',
     NOW()
 )
-ON CONFLICT (email) DO UPDATE SET is_central_staff = true, role = 'admin';
+ON CONFLICT (email) DO UPDATE SET is_central_staff = true, role = 'user';
 
 -- Ensure Owner + Renter profiles exist for staff account
 DO $$

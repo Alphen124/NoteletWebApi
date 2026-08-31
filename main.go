@@ -328,17 +328,21 @@ func main() {
 		fmt.Println("\u2713 Device Status table ready (Available/Delivered/Returned/Overdue/Reserved/Rented)")
 	}
 
-	// Ensure legacy AppUser rows have a non-null role default for older databases
+	// Ensure legacy AppUser rows have a compatible role column for older databases.
+	// The app does not require a strict role enum; some Render/Postgres schemas had a custom
+	// CHECK constraint that rejected values like 'admin'/'user'. Drop that conflict and
+	// normalize the column to a safe default instead.
 	appUserRoleMigrationSQL := `
 		ALTER TABLE appuser ADD COLUMN IF NOT EXISTS role VARCHAR(50);
+		ALTER TABLE appuser DROP CONSTRAINT IF EXISTS appuser_role_check;
+		ALTER TABLE appuser ALTER COLUMN role DROP NOT NULL;
 		UPDATE appuser SET role = 'user' WHERE role IS NULL;
 		ALTER TABLE appuser ALTER COLUMN role SET DEFAULT 'user';
-		ALTER TABLE appuser ALTER COLUMN role SET NOT NULL;
 	`
 	if _, err := db.Exec(appUserRoleMigrationSQL); err != nil {
 		fmt.Printf("Warning: appuser role migration error: %v\n", err)
 	} else {
-		fmt.Println("✓ appuser role default ensured")
+		fmt.Println("✓ appuser role compatibility ensured")
 	}
 
 	// Migration 008: Fix RentBill rating triggers to use AvgRating column
@@ -460,7 +464,7 @@ func main() {
 		var userId int
 		err = tx.QueryRow(`
 			INSERT INTO appuser (email, passwordhash, isactive, is_admin, role, createdat)
-			VALUES ($1, $2, true, true, 'admin', NOW()) RETURNING userid
+			VALUES ($1, $2, true, true, 'user', NOW()) RETURNING userid
 		`, acc.email, hashedAdminPw).Scan(&userId)
 		if err != nil {
 			tx.Rollback()
