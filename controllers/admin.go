@@ -326,22 +326,44 @@ func (ac *AdminController) GetAdminStats(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var totalUsers, totalDevices, totalStaff, totalAdmins, activeDevices, totalRentals int
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM appuser`).Scan(&totalUsers)
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM device`).Scan(&totalDevices)
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM appuser WHERE COALESCE(is_central_staff,false)=true`).Scan(&totalStaff)
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM appuser WHERE COALESCE(is_admin,false)=true`).Scan(&totalAdmins)
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM device WHERE currentstatus NOT IN ('deleted','unavailable')`).Scan(&activeDevices)
-	ac.DB.QueryRow(`SELECT COUNT(*) FROM rentalrequest`).Scan(&totalRentals)
+	var stats struct {
+		TotalUsers    int     `json:"total_users"`
+		TotalDevices  int     `json:"total_devices"`
+		TotalStaff    int     `json:"total_staff"`
+		TotalAdmins   int     `json:"total_admins"`
+		Available     int     `json:"available_devices"`
+		Reserved      int     `json:"reserved_devices"`
+		Rented        int     `json:"rented_devices"`
+		ActiveDevices int     `json:"active_devices"`
+		TotalRentals  int     `json:"total_rentals"`
+		Completed     int     `json:"completed_rentals"`
+		TotalRevenue  float64 `json:"total_revenue"`
+	}
+	err := ac.DB.QueryRow(`
+		SELECT
+			(SELECT COUNT(*) FROM appuser),
+			(SELECT COUNT(*) FROM device),
+			(SELECT COUNT(*) FROM appuser WHERE COALESCE(is_central_staff, false)),
+			(SELECT COUNT(*) FROM appuser WHERE COALESCE(is_admin, false)),
+			(SELECT COUNT(*) FROM device WHERE status = 1),
+			(SELECT COUNT(*) FROM device WHERE status = 5),
+			(SELECT COUNT(*) FROM device WHERE status = 6),
+			(SELECT COUNT(*) FROM device WHERE status <> 0),
+			(SELECT COUNT(*) FROM rentalrequest),
+			(SELECT COUNT(*) FROM rentalrequest WHERE status = 'Rental Completed'),
+			(SELECT COALESCE(SUM(totalprice), 0) FROM rentalrequest
+			 WHERE status = 'Rental Completed')
+	`).Scan(
+		&stats.TotalUsers, &stats.TotalDevices, &stats.TotalStaff, &stats.TotalAdmins,
+		&stats.Available, &stats.Reserved, &stats.Rented, &stats.ActiveDevices,
+		&stats.TotalRentals, &stats.Completed, &stats.TotalRevenue,
+	)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to calculate dashboard stats", err.Error())
+		return
+	}
 
-	respondWithSuccess(w, http.StatusOK, "Stats retrieved", map[string]int{
-		"total_users":    totalUsers,
-		"total_devices":  totalDevices,
-		"total_staff":    totalStaff,
-		"total_admins":   totalAdmins,
-		"active_devices": activeDevices,
-		"total_rentals":  totalRentals,
-	})
+	respondWithSuccess(w, http.StatusOK, "Stats retrieved", stats)
 }
 
 // SetAdminRole PATCH /api/admin/users/{userId}/set-admin — promote or demote admin
