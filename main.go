@@ -273,10 +273,11 @@ func main() {
 	chatMigrationSQL := `
 		CREATE TABLE IF NOT EXISTS ChatRoom (
 			RoomId    SERIAL PRIMARY KEY,
-			RoomName  VARCHAR(100) NOT NULL UNIQUE,
+			RoomName  VARCHAR(100) NOT NULL,
 			IsPublic  BOOLEAN DEFAULT true,
 			CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS ux_chatroom_roomname ON ChatRoom (RoomName);
 		ALTER TABLE ChatRoom ADD COLUMN IF NOT EXISTS DeviceId INTEGER;
 		CREATE TABLE IF NOT EXISTS ChatMessage (
 			MessageId SERIAL PRIMARY KEY,

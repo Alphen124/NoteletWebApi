@@ -712,9 +712,27 @@ func (cc *ChatController) EnsureDeviceRoom(w http.ResponseWriter, r *http.Reques
 		 ON CONFLICT (RoomName) DO UPDATE SET DeviceId = EXCLUDED.DeviceId`,
 		roomName, body.DeviceID,
 	); err != nil {
-		log.Printf("EnsureDeviceRoom: db error inserting room=%s deviceId=%d: %v", roomName, body.DeviceID, err)
-		http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
-		return
+		if strings.Contains(err.Error(), "there is no unique or exclusion constraint matching the ON CONFLICT specification") {
+			if _, indexErr := cc.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_chatroom_roomname ON ChatRoom (RoomName)`); indexErr != nil {
+				log.Printf("EnsureDeviceRoom: failed to repair ChatRoom unique index room=%s deviceId=%d: %v", roomName, body.DeviceID, indexErr)
+				http.Error(w, "db error: "+indexErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if _, retryErr := cc.db.Exec(
+				`INSERT INTO ChatRoom (RoomName, IsPublic, DeviceId)
+				 VALUES ($1, false, $2)
+				 ON CONFLICT (RoomName) DO UPDATE SET DeviceId = EXCLUDED.DeviceId`,
+				roomName, body.DeviceID,
+			); retryErr != nil {
+				log.Printf("EnsureDeviceRoom: db error retrying room=%s deviceId=%d: %v", roomName, body.DeviceID, retryErr)
+				http.Error(w, "db error: "+retryErr.Error(), http.StatusInternalServerError)
+				return
+			}
+		} else {
+			log.Printf("EnsureDeviceRoom: db error inserting room=%s deviceId=%d: %v", roomName, body.DeviceID, err)
+			http.Error(w, "db error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"roomName": roomName})
