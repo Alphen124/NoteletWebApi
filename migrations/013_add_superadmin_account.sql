@@ -2,16 +2,17 @@
 -- Email: superadmin@notelet.com  |  Password: Admin@Notelet2026
 -- bcrypt cost-10 hash of "Admin@Notelet2026"
 
-INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, createdat)
+INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, role, createdat)
 VALUES (
     'superadmin@notelet.com',
     '$2a$10$2b7XCxTrLKmpfE.jUSHive.xl27m5z6EmdFNaZOJV5CPXThWTo7Ku',
     true,
     true,
     true,
+    'admin',
     NOW()
 )
-ON CONFLICT (email) DO UPDATE SET is_admin = true, is_central_staff = true;
+ON CONFLICT (email) DO UPDATE SET is_admin = true, is_central_staff = true, role = 'admin';
 
 -- Ensure Owner + Renter profiles exist for superadmin
 DO $$

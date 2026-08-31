@@ -312,6 +312,7 @@ func main() {
 	// Ensure device Status table has correct device-centric names
 	// StatusNo 1-4 = device lifecycle, 5-6 = booking states added by migration 005
 	deviceStatusSQL := `
+		CREATE UNIQUE INDEX IF NOT EXISTS ux_status_statusno ON Status (StatusNo);
 		INSERT INTO Status (StatusNo, Name) VALUES
 			(1, 'Available'),
 			(2, 'Delivered'),
@@ -325,6 +326,19 @@ func main() {
 		fmt.Printf("Warning: device Status upsert error: %v\n", err)
 	} else {
 		fmt.Println("\u2713 Device Status table ready (Available/Delivered/Returned/Overdue/Reserved/Rented)")
+	}
+
+	// Ensure legacy AppUser rows have a non-null role default for older databases
+	appUserRoleMigrationSQL := `
+		ALTER TABLE appuser ADD COLUMN IF NOT EXISTS role VARCHAR(50);
+		UPDATE appuser SET role = 'user' WHERE role IS NULL;
+		ALTER TABLE appuser ALTER COLUMN role SET DEFAULT 'user';
+		ALTER TABLE appuser ALTER COLUMN role SET NOT NULL;
+	`
+	if _, err := db.Exec(appUserRoleMigrationSQL); err != nil {
+		fmt.Printf("Warning: appuser role migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ appuser role default ensured")
 	}
 
 	// Migration 008: Fix RentBill rating triggers to use AvgRating column
@@ -445,8 +459,8 @@ func main() {
 		}
 		var userId int
 		err = tx.QueryRow(`
-			INSERT INTO appuser (email, passwordhash, isactive, is_admin, createdat)
-			VALUES ($1, $2, true, true, NOW()) RETURNING userid
+			INSERT INTO appuser (email, passwordhash, isactive, is_admin, role, createdat)
+			VALUES ($1, $2, true, true, 'admin', NOW()) RETURNING userid
 		`, acc.email, hashedAdminPw).Scan(&userId)
 		if err != nil {
 			tx.Rollback()
@@ -492,8 +506,8 @@ func main() {
 		}
 		var userId int
 		err = tx.QueryRow(`
-			INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_authorized_lender, createdat)
-			VALUES ($1, $2, true, false, true, NOW()) RETURNING userid
+			INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_authorized_lender, role, createdat)
+			VALUES ($1, $2, true, false, true, 'user', NOW()) RETURNING userid
 		`, acc.email, hashedLenderPw).Scan(&userId)
 		if err != nil {
 			tx.Rollback()

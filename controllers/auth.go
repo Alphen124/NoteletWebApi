@@ -110,8 +110,8 @@ func (ac *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 	// สร้างผู้ใช้ใน AppUser table (ตั้ง is_admin=true สำหรับ whitelist emails)
 	var userId int
 	err = tx.QueryRow(`
-		INSERT INTO appuser (email, passwordhash, isactive, is_admin, createdat)
-		VALUES ($1, $2, $3, $4, NOW())
+		INSERT INTO appuser (email, passwordhash, isactive, is_admin, role, createdat)
+		VALUES ($1, $2, $3, $4, 'user', NOW())
 		RETURNING userid
 	`, strings.ToLower(req.Email), hashedPassword, true, isAdminEmail(req.Email)).Scan(&userId)
 
@@ -478,8 +478,8 @@ func (ac *AuthController) AdminRegister(w http.ResponseWriter, r *http.Request) 
 
 	var userId int
 	err = tx.QueryRow(`
-		INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, createdat)
-		VALUES ($1, $2, $3, $4, $5, NOW())
+		INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, role, createdat)
+		VALUES ($1, $2, $3, $4, $5, 'admin', NOW())
 		RETURNING userid
 	`, strings.ToLower(req.Email), hashedPassword, true, true, req.IsCentralStaff).Scan(&userId)
 	if err != nil {

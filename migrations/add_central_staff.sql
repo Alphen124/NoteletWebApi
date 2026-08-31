@@ -6,16 +6,17 @@ ALTER TABLE appuser ADD COLUMN IF NOT EXISTS is_central_staff BOOLEAN NOT NULL D
 -- Create the central staff account
 -- Email: staff@notelet.com  |  Password: StaffNotelet@2026
 -- Hash below is bcrypt cost-10 for "StaffNotelet@2026"
-INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, createdat)
+INSERT INTO appuser (email, passwordhash, isactive, is_admin, is_central_staff, role, createdat)
 VALUES (
     'staff@notelet.com',
     '$2a$10$9QGkRFv/M.I6c8dE2F3B4.kFxIVe8kT7bRqFNyqTnOW3F0Ywr2/Xe',
     true,
     false,
     true,
+    'admin',
     NOW()
 )
-ON CONFLICT (email) DO UPDATE SET is_central_staff = true;
+ON CONFLICT (email) DO UPDATE SET is_central_staff = true, role = 'admin';
 
 -- Ensure Owner + Renter profiles exist for staff account
 DO $$

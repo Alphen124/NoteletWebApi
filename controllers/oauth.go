@@ -219,8 +219,8 @@ func (oc *OAuthController) createUserFromGoogle(googleUser *oauth.GoogleUserInfo
 	// สร้าง user ใน AppUser table (ไม่มี password เพราะใช้ OAuth, ไม่มี role)
 	var userId int
 	err = tx.QueryRow(`
-		INSERT INTO appuser (email, passwordhash, isactive, createdat)
-		VALUES ($1, NULL, $2, NOW())
+		INSERT INTO appuser (email, passwordhash, isactive, role, createdat)
+		VALUES ($1, NULL, $2, 'user', NOW())
 		RETURNING userid
 	`, strings.ToLower(googleUser.Email), true).Scan(&userId)
 

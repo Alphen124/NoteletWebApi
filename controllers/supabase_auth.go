@@ -275,8 +275,8 @@ func (sc *SupabaseAuthController) createUserFromSupabase(email, fullName string)
 
 	var userId int
 	err = tx.QueryRow(`
-		INSERT INTO appuser (email, passwordhash, isactive, createdat)
-		VALUES ($1, NULL, true, NOW())
+		INSERT INTO appuser (email, passwordhash, isactive, role, createdat)
+		VALUES ($1, NULL, true, 'user', NOW())
 		RETURNING userid
 	`, email).Scan(&userId)
 	if err != nil {
