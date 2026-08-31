@@ -713,7 +713,22 @@ func (cc *ChatController) EnsureDeviceRoom(w http.ResponseWriter, r *http.Reques
 		roomName, body.DeviceID,
 	); err != nil {
 		if strings.Contains(err.Error(), "there is no unique or exclusion constraint matching the ON CONFLICT specification") {
-			if _, indexErr := cc.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_chatroom_roomname ON ChatRoom (RoomName)`); indexErr != nil {
+			if _, indexErr := cc.db.Exec(`
+				WITH ranked AS (
+					SELECT "RoomId",
+					       ROW_NUMBER() OVER (
+						   PARTITION BY "RoomName"
+						   ORDER BY "CreatedAt" ASC, "RoomId" ASC
+						) AS rn
+					FROM "ChatRoom"
+					WHERE "RoomName" IS NOT NULL
+				)
+				DELETE FROM "ChatRoom"
+				WHERE "RoomId" IN (
+					SELECT "RoomId" FROM ranked WHERE rn > 1
+				);
+				CREATE UNIQUE INDEX IF NOT EXISTS ux_chatroom_roomname ON ChatRoom (RoomName);
+			`); indexErr != nil {
 				log.Printf("EnsureDeviceRoom: failed to repair ChatRoom unique index room=%s deviceId=%d: %v", roomName, body.DeviceID, indexErr)
 				http.Error(w, "db error: "+indexErr.Error(), http.StatusInternalServerError)
 				return

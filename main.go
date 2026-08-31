@@ -277,6 +277,19 @@ func main() {
 			IsPublic  BOOLEAN DEFAULT true,
 			CreatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 		);
+		WITH ranked AS (
+			SELECT "RoomId",
+			       ROW_NUMBER() OVER (
+				   PARTITION BY "RoomName"
+				   ORDER BY "CreatedAt" ASC, "RoomId" ASC
+				) AS rn
+			FROM "ChatRoom"
+			WHERE "RoomName" IS NOT NULL
+		)
+		DELETE FROM "ChatRoom"
+		WHERE "RoomId" IN (
+			SELECT "RoomId" FROM ranked WHERE rn > 1
+		);
 		CREATE UNIQUE INDEX IF NOT EXISTS ux_chatroom_roomname ON ChatRoom (RoomName);
 		ALTER TABLE ChatRoom ADD COLUMN IF NOT EXISTS DeviceId INTEGER;
 		CREATE TABLE IF NOT EXISTS ChatMessage (
