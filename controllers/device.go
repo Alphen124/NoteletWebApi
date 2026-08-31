@@ -49,7 +49,24 @@ func (dc *DeviceController) resolveDeviceTypeNo(typeName string) (int, error) {
 		ON CONFLICT (DeviceTypeName) DO NOTHING
 	`, normalized)
 	if insertErr != nil {
-		return 0, insertErr
+		if strings.Contains(insertErr.Error(), "there is no unique or exclusion constraint matching the ON CONFLICT specification") {
+			if _, indexErr := dc.DB.Exec(`
+				CREATE UNIQUE INDEX IF NOT EXISTS ux_devicetype_name
+				ON DeviceType (DeviceTypeName)
+			`); indexErr != nil {
+				return 0, indexErr
+			}
+			_, insertErr = dc.DB.Exec(`
+				INSERT INTO DeviceType (DeviceTypeName)
+				VALUES ($1)
+				ON CONFLICT (DeviceTypeName) DO NOTHING
+			`, normalized)
+			if insertErr != nil {
+				return 0, insertErr
+			}
+		} else {
+			return 0, insertErr
+		}
 	}
 
 	err = dc.DB.QueryRow(`

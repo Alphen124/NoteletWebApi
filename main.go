@@ -332,8 +332,9 @@ func main() {
 	deviceTypeMigrationSQL := `
 		CREATE TABLE IF NOT EXISTS DeviceType (
 			DeviceTypeNo SERIAL PRIMARY KEY,
-			DeviceTypeName VARCHAR(100) NOT NULL UNIQUE
+			DeviceTypeName VARCHAR(100) NOT NULL
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS ux_devicetype_name ON DeviceType (DeviceTypeName);
 		INSERT INTO DeviceType (DeviceTypeName) VALUES
 			('Notebook'),
 			('MacBook'),
