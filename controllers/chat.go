@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -570,8 +571,29 @@ func (cc *ChatController) ServeWS(w http.ResponseWriter, r *http.Request) {
 	}
 	var roomExists int
 	if dbErr := cc.db.QueryRow(`SELECT COUNT(*) FROM ChatRoom WHERE RoomName=$1`, roomName).Scan(&roomExists); dbErr != nil || roomExists == 0 {
-		http.Error(w, "room not found", http.StatusBadRequest)
-		return
+		if strings.HasPrefix(roomName, "dev-") {
+			candidate := strings.TrimPrefix(roomName, "dev-")
+			if idx := strings.Index(candidate, "-u-"); idx > 0 {
+				candidate = candidate[:idx]
+			}
+			if idx := strings.Index(candidate, "-req-"); idx > 0 {
+				candidate = candidate[:idx]
+			}
+			if deviceID, err := strconv.Atoi(candidate); err == nil && deviceID > 0 {
+				if _, insertErr := cc.db.Exec(
+					`INSERT INTO ChatRoom (RoomName, IsPublic, DeviceId)
+					 VALUES ($1, false, $2)
+					 ON CONFLICT (RoomName) DO UPDATE SET DeviceId = EXCLUDED.DeviceId`,
+					roomName, deviceID,
+				); insertErr == nil {
+					roomExists = 1
+				}
+			}
+		}
+		if roomExists == 0 {
+			http.Error(w, "room not found", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// --- Upgrade ---
