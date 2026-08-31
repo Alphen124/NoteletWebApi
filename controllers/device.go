@@ -24,6 +24,45 @@ func NewDeviceController(db *sql.DB) *DeviceController {
 	return &DeviceController{DB: db}
 }
 
+func (dc *DeviceController) resolveDeviceTypeNo(typeName string) (int, error) {
+	normalized := strings.TrimSpace(typeName)
+	if normalized == "" {
+		return 0, fmt.Errorf("device type is required")
+	}
+
+	var deviceTypeNo int
+	err := dc.DB.QueryRow(`
+		SELECT DeviceTypeNo
+		FROM DeviceType
+		WHERE LOWER(DeviceTypeName) = LOWER($1)
+	`, normalized).Scan(&deviceTypeNo)
+	if err == nil {
+		return deviceTypeNo, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+
+	_, insertErr := dc.DB.Exec(`
+		INSERT INTO DeviceType (DeviceTypeName)
+		VALUES ($1)
+		ON CONFLICT (DeviceTypeName) DO NOTHING
+	`, normalized)
+	if insertErr != nil {
+		return 0, insertErr
+	}
+
+	err = dc.DB.QueryRow(`
+		SELECT DeviceTypeNo
+		FROM DeviceType
+		WHERE LOWER(DeviceTypeName) = LOWER($1)
+	`, normalized).Scan(&deviceTypeNo)
+	if err != nil {
+		return 0, err
+	}
+	return deviceTypeNo, nil
+}
+
 // CreateDevice handles POST /api/devices - Create a new device
 func (dc *DeviceController) CreateDevice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -59,14 +98,10 @@ func (dc *DeviceController) CreateDevice(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get DeviceTypeNo based on type name
-	var deviceTypeNo int
-	err := dc.DB.QueryRow(
-		"SELECT DeviceTypeNo FROM DeviceType WHERE DeviceTypeName = $1",
-		req.Type,
-	).Scan(&deviceTypeNo)
+	// Get or create DeviceTypeNo based on the requested type name.
+	deviceTypeNo, err := dc.resolveDeviceTypeNo(req.Type)
 	if err != nil {
-		fmt.Printf("Error getting DeviceTypeNo: %v\n", err)
+		fmt.Printf("Error resolving DeviceTypeNo for type %q: %v\n", req.Type, err)
 		respondWithError(w, http.StatusBadRequest, "Invalid device type", err.Error())
 		return
 	}
@@ -519,12 +554,8 @@ func (dc *DeviceController) UpdateDevice(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Get DeviceTypeNo based on type name
-	var deviceTypeNo int
-	err = dc.DB.QueryRow(
-		"SELECT DeviceTypeNo FROM DeviceType WHERE DeviceTypeName = $1",
-		req.Type,
-	).Scan(&deviceTypeNo)
+	// Get or create DeviceTypeNo based on type name.
+	deviceTypeNo, err := dc.resolveDeviceTypeNo(req.Type)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Invalid device type", err.Error())
 		return

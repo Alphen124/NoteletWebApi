@@ -328,6 +328,24 @@ func main() {
 		fmt.Println("\u2713 Device Status table ready (Available/Delivered/Returned/Overdue/Reserved/Rented)")
 	}
 
+	// Ensure the device type catalog exists for the frontend values Notebook/MacBook/Other.
+	deviceTypeMigrationSQL := `
+		CREATE TABLE IF NOT EXISTS DeviceType (
+			DeviceTypeNo SERIAL PRIMARY KEY,
+			DeviceTypeName VARCHAR(100) NOT NULL UNIQUE
+		);
+		INSERT INTO DeviceType (DeviceTypeName) VALUES
+			('Notebook'),
+			('MacBook'),
+			('Other')
+		ON CONFLICT (DeviceTypeName) DO NOTHING;
+	`
+	if _, err := db.Exec(deviceTypeMigrationSQL); err != nil {
+		fmt.Printf("Warning: device type migration error: %v\n", err)
+	} else {
+		fmt.Println("✓ Device type catalog ready (Notebook/MacBook/Other)")
+	}
+
 	// Ensure legacy AppUser rows have a compatible role column for older databases.
 	// The app does not require a strict role enum; some Render/Postgres schemas had a custom
 	// CHECK constraint that rejected values like 'admin'/'user'. Drop that conflict and
